@@ -1,0 +1,11 @@
+node_modules/
+*.log
+*.tmp
+.DS_Store
+
+# Generato da check.sh a runtime con i path dell'installazione Pi risolti.
+tsconfig.check.resolved.json
+
+# Cache di test
+__pycache__/
+*.pyc
