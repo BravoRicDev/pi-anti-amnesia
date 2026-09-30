@@ -7,16 +7,16 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
 
-// TypeScript e typebox vivono fuori dal repo (installazione Pi, globale).
-// Risolverli con createRequire su più radici evita di fissare path assoluti nel
-// test: lo stesso file gira su macchine diverse senza modifiche.
+// TypeScript and typebox live outside the repo (Pi installation, global).
+// Resolving them with createRequire over several roots avoids hardcoding absolute
+// paths in the test: the same file runs on different machines unchanged.
 const require = createRequire(import.meta.url);
 
 function resolveFrom(roots, name) {
   for (const root of roots) {
     try {
       return require.resolve(name, { paths: [root] });
-    } catch { /* prova la radice successiva */ }
+    } catch { /* try the next root */ }
   }
   return null;
 }
@@ -25,10 +25,10 @@ const searchRoots = [
   path.resolve(import.meta.dirname, '..'),
   path.resolve(import.meta.dirname, '..', '..'),
   process.env.PI_CODING_AGENT ?? '',
-  // TypeScript puo' vivere in un albero npm globale, in un harness separato
-  // dalla stessa installazione Pi, o in ~/.pi/agent/npm. Se lo cerchiamo solo
-  // sotto l'installazione di Pi, il test non parte su macchine dove i due
-  // alberi sono separati.
+  // TypeScript may live in a global npm tree, in a harness separate
+  // from the same Pi installation, or in ~/.pi/agent/npm. If we only search
+  // under the Pi installation, the test does not start on machines where the two
+  // trees are separate.
   path.join(process.env.HOME ?? '', '.hermes', 'hermes-agent', 'node_modules'),
   path.join(process.env.HOME ?? '', '.hermes', 'node', 'lib', 'node_modules'),
   path.join(process.env.HOME ?? '', '.pi', 'agent', 'npm', 'node_modules'),
@@ -38,13 +38,13 @@ const searchRoots = [
 const tsPath = resolveFrom(searchRoots, 'typescript');
 if (!tsPath) {
   throw new Error(
-    'TypeScript non trovato. Imposta PI_CODING_AGENT=/path/to/pi-coding-agent, ' +
-    'oppure installa typescript dove node la trova. Estendi searchRoots in questo file.',
+    'TypeScript not found. Set PI_CODING_AGENT=/path/to/pi-coding-agent, ' +
+    'or install typescript where node can find it. Extend searchRoots in this file.',
   );
 }
 const ts = (await import(pathToFileURL(tsPath).href)).default;
 
-// typebox viene importato dall'estensione transpilata: risolto come URL assoluto.
+// typebox is imported by the transpiled extension: resolved as an absolute URL.
 const typeboxPath = resolveFrom(searchRoots, 'typebox');
 const typeboxUrl = typeboxPath ? pathToFileURL(typeboxPath).href : null;
 
@@ -63,8 +63,8 @@ async function harness() {
       .replace("from 'typebox'", typeboxUrl ? `from ${JSON.stringify(typeboxUrl)}` : "from 'typebox'");
     fs.writeFileSync(path.join(temp, 'index.mjs'), js);
     fs.copyFileSync(path.join(root, 'topic-scope.mjs'), path.join(temp, 'topic-scope.mjs'));
-    // L'estensione risolve l'i18n come modulo fratello: senza questi file nella
-    // dir temporanea la sessione non parte e ogni test muore su helperUnreadable.
+    // The extension resolves i18n as a sibling module: without these files in the
+    // temporary dir the session does not start and every test dies on helperUnreadable.
     fs.copyFileSync(path.join(root, 'i18n.mjs'), path.join(temp, 'i18n.mjs'));
     fs.cpSync(path.join(root, 'i18n'), path.join(temp, 'i18n'), { recursive: true });
     fs.writeFileSync(path.join(temp, 'config.json'), fs.readFileSync(path.join(root, 'config.json')));
@@ -107,7 +107,7 @@ test('simultaneous periodic and random review inject the card once without neste
   let h;
   try {
     h = await harness();
-    await h.tools.get('carta_memoria').execute('id', { testo: card, ogni_turni: 1 }, undefined, undefined, h.ctx);
+    await h.tools.get('memory_card').execute('id', { text: card, everyTurns: 1 }, undefined, undefined, h.ctx);
     await h.handlers.get('turn_end')();
     const response = await h.handlers.get('context')({ messages: [{ role: 'user', content: 'continua' }] });
     const text = response.messages.at(-1).content;
@@ -120,21 +120,21 @@ test('simultaneous periodic and random review inject the card once without neste
 test('archived topics require the current turn prompt, never a historical user message', async () => {
   const h = await harness();
   try {
-    await h.tools.get('carta_memoria').execute('id', { testo: card }, undefined, undefined, h.ctx);
+    await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
     await h.handlers.get('session_start')({ reason: 'resume' }, h.ctx);
     const historical = [{ role: 'user', content: 'CRM' }, { role: 'assistant', content: 'Vecchia risposta' }];
     const resumed = await h.handlers.get('context')({ messages: historical });
     assert.doesNotMatch(resumed.messages.at(-1).content, /Vecchia campagna CRM/);
     await h.handlers.get('before_agent_start')({ prompt: 'CRM', systemPrompt: 'SYS', systemPromptOptions: { cwd: h.temp } });
-    await h.commands.get('carta').handler('ora', h.ctx);
+    await h.commands.get('card').handler('now', h.ctx);
     const current = await h.handlers.get('context')({ messages: historical });
     assert.match(current.messages.at(-1).content, /Vecchia campagna CRM/);
     await h.handlers.get('agent_settled')();
-    await h.commands.get('carta').handler('ora', h.ctx);
+    await h.commands.get('card').handler('now', h.ctx);
     const settled = await h.handlers.get('context')({ messages: historical });
     assert.doesNotMatch(settled.messages.at(-1).content, /Vecchia campagna CRM/);
     await h.handlers.get('before_agent_start')({ prompt: 'continua', systemPrompt: 'SYS', systemPromptOptions: { cwd: h.temp } });
-    await h.commands.get('carta').handler('ora', h.ctx);
+    await h.commands.get('card').handler('now', h.ctx);
     const unrelated = await h.handlers.get('context')({ messages: historical });
     assert.doesNotMatch(unrelated.messages.at(-1).content, /Vecchia campagna CRM/);
   } finally { cleanup(h); }
@@ -143,14 +143,14 @@ test('archived topics require the current turn prompt, never a historical user m
 test('interval validation rejects ineffective values and rearms random review', async () => {
   const h = await harness();
   try {
-    const tool = h.tools.get('carta_memoria');
-    const invalid = await tool.execute('id', { testo: card, ogni_turni: 1001 }, undefined, undefined, h.ctx);
-    assert.equal(invalid.details.error, 'intervallo-non-valido');
+    const tool = h.tools.get('memory_card');
+    const invalid = await tool.execute('id', { text: card, everyTurns: 1001 }, undefined, undefined, h.ctx);
+    assert.equal(invalid.details.error, 'invalid-interval');
     assert.equal(fs.existsSync(path.join(h.temp, '.pi/anti-amnesia/cards/test-session-uuid.md')), false);
-    await tool.execute('id', { testo: card }, undefined, undefined, h.ctx);
-    await h.commands.get('carta').handler('ogni 1001', h.ctx);
+    await tool.execute('id', { text: card }, undefined, undefined, h.ctx);
+    await h.commands.get('card').handler('every 1001', h.ctx);
     assert.match(h.notifications.at(-1)[0], /N fra 1 e 1000/);
-    await h.commands.get('carta').handler('ogni 1', h.ctx);
+    await h.commands.get('card').handler('every 1', h.ctx);
     await h.handlers.get('turn_end')();
     await h.handlers.get('turn_end')();
     const refresh = await h.handlers.get('context')({ messages: [{ role: 'user', content: 'continua' }] });
@@ -180,11 +180,11 @@ test('a busy registry lock fails explicitly without replacing another writer', a
     const lockPath = path.join(h.temp, '.pi/anti-amnesia/registry.json.lock');
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
     fs.writeFileSync(lockPath, '999999\n');
-    const blocked = await h.tools.get('carta_memoria').execute('id', { testo: card }, undefined, undefined, h.ctx);
-    assert.equal(blocked.details.error, 'registro-fallito');
+    const blocked = await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
+    assert.equal(blocked.details.error, 'registry-failed');
     assert.equal(fs.readFileSync(lockPath, 'utf8'), '999999\n');
     fs.unlinkSync(lockPath);
-    const retried = await h.tools.get('carta_memoria').execute('retry', { testo: card }, undefined, undefined, h.ctx);
+    const retried = await h.tools.get('memory_card').execute('retry', { text: card }, undefined, undefined, h.ctx);
     assert.equal(retried.details.ok, true);
   } finally { cleanup(h); }
 });
@@ -195,12 +195,12 @@ test('concurrent processes preserve both session entries in the registry', async
     const workerPath = path.join(h.temp, 'registry-worker.mjs');
     fs.writeFileSync(workerPath, `import extension from './index.mjs';
 const handlers = new Map(); let tool;
-const pi = { on: (name, fn) => handlers.set(name, fn), registerTool: (entry) => { if (entry.name === 'carta_memoria') tool = entry; }, registerCommand() {} };
+const pi = { on: (name, fn) => handlers.set(name, fn), registerTool: (entry) => { if (entry.name === 'memory_card') tool = entry; }, registerCommand() {} };
 extension(pi);
 const ctx = { cwd: process.env.HOME, hasUI: false, sessionManager: { getSessionId: () => process.argv[2] } };
 await handlers.get('session_start')({ reason: 'startup' }, ctx);
 for (let i = 0; i < 8; i++) {
-  const result = await tool.execute('id', { testo: '## Lavoro attivo\\nTask ' + process.argv[2] + ' #' + i }, undefined, undefined, ctx);
+  const result = await tool.execute('id', { text: '## Lavoro attivo\\nTask ' + process.argv[2] + ' #' + i }, undefined, undefined, ctx);
   if (!result.details.ok) throw new Error(JSON.stringify(result.details));
 }`);
     const launch = (id) => new Promise((resolve, reject) => {
@@ -225,7 +225,7 @@ test('first prompt bootstraps, a saved card survives short prompts and an immedi
     const context = h.handlers.get('context');
     const first = await before({ prompt: 'continua', systemPrompt: 'SYS', systemPromptOptions: { cwd: h.temp } });
     assert.match(first.message.content, /BOOTSTRAP/);
-    const saved = await h.tools.get('carta_memoria').execute('id', { testo: card, ruolo: 'dev' }, undefined, undefined, h.ctx);
+    const saved = await h.tools.get('memory_card').execute('id', { text: card, role: 'dev' }, undefined, undefined, h.ctx);
     assert.equal(saved.details.ok, true);
     assert.equal(h.messages.length, 0);
     const input = [{ role: 'user', content: 'continua' }];
@@ -243,9 +243,9 @@ test('first prompt bootstraps, a saved card survives short prompts and an immedi
 test('checkpoint update replaces only current work and preserves archived notes', async () => {
   const h = await harness();
   try {
-    const tool = h.tools.get('carta_memoria');
-    assert.equal((await tool.execute('a', { testo: card }, undefined, undefined, h.ctx)).details.ok, true);
-    const updated = await tool.execute('b', { lavoro_attivo: 'Obiettivo: pagamenti; test refund ora.' }, undefined, undefined, h.ctx);
+    const tool = h.tools.get('memory_card');
+    assert.equal((await tool.execute('a', { text: card }, undefined, undefined, h.ctx)).details.ok, true);
+    const updated = await tool.execute('b', { activeWork: 'Obiettivo: pagamenti; test refund ora.' }, undefined, undefined, h.ctx);
     assert.equal(updated.details.ok, true);
     const saved = fs.readFileSync(path.join(h.temp, '.pi/anti-amnesia/cards/test-session-uuid.md'), 'utf8');
     assert.match(saved, /test refund ora/);
@@ -258,7 +258,7 @@ test('checkpoint update replaces only current work and preserves archived notes'
 test('a resumed card is delivered on the very first autonomous LLM call', async () => {
   const h = await harness();
   try {
-    await h.tools.get('carta_memoria').execute('id', { testo: card }, undefined, undefined, h.ctx);
+    await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
     await h.handlers.get('session_start')({ reason: 'resume' }, h.ctx);
     const first = await h.handlers.get('context')({ messages: [{ role: 'user', content: 'continua' }] });
     assert.match(first.messages.at(-1).content, /ripresa sessione/);
@@ -272,7 +272,7 @@ test('reload refreshes the ESM helper rather than keeping a stale cached copy', 
   const h = await harness();
   try {
     const helper = path.join(h.temp, 'topic-scope.mjs');
-    await h.tools.get('carta_memoria').execute('id', { testo: card }, undefined, undefined, h.ctx);
+    await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
     const old = fs.readFileSync(helper, 'utf8');
     assert.match(old, /const selected = \[\.\.\.scope\.always, \.\.\.scope\.active\];/);
     fs.writeFileSync(helper, old.replace(
@@ -303,8 +303,8 @@ test('regenerate archives old card and resume cannot resurrect it', async () => 
   const h = await harness();
   try {
     const file = path.join(h.temp, '.pi/anti-amnesia/cards/test-session-uuid.md');
-    await h.tools.get('carta_memoria').execute('id', { testo: card }, undefined, undefined, h.ctx);
-    await h.commands.get('carta').handler('rigenera', h.ctx);
+    await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
+    await h.commands.get('card').handler('regenerate', h.ctx);
     assert.equal(fs.existsSync(file), false);
     assert.equal(fs.readFileSync(`${file}.bak`, 'utf8'), card);
     await h.handlers.get('session_start')({ reason: 'resume' }, h.ctx);
@@ -322,7 +322,7 @@ test('explicit shared draft never enters model as active memory', async () => {
     const draftPath = path.join(h.temp, 'PiAgent/prompts/carta-anti-amnesia.md');
     fs.mkdirSync(path.dirname(draftPath), { recursive: true });
     fs.writeFileSync(draftPath, 'BOZZA DA PERSONALIZZARE');
-    await h.commands.get('carta').handler('bootstrap', h.ctx);
+    await h.commands.get('card').handler('bootstrap', h.ctx);
     const first = await h.handlers.get('before_agent_start')({ prompt: 'ok', systemPrompt: 'SYS', systemPromptOptions: { cwd: h.temp } });
     assert.match(first.message.content, /BOOTSTRAP/);
     assert.equal(await h.handlers.get('context')({ messages: [{ role: 'user', content: 'ok' }] }), undefined);
@@ -334,11 +334,11 @@ test('failed registry write is reported without corrupting the saved card', asyn
   try {
     const registry = path.join(h.temp, '.pi/anti-amnesia/registry.json');
     fs.mkdirSync(registry, { recursive: true }); // rename over directory must fail
-    const result = await h.tools.get('carta_memoria').execute('id', { testo: card }, undefined, undefined, h.ctx);
+    const result = await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
     assert.equal(result.details.ok, false);
-    assert.equal(result.details.error, 'registro-fallito');
-    assert.equal(result.details.cartaSalvata, true);
-    await h.commands.get('carta').handler('ogni 4', h.ctx);
+    assert.equal(result.details.error, 'registry-failed');
+    assert.equal(result.details.cardSaved, true);
+    await h.commands.get('card').handler('every 4', h.ctx);
     assert.match(h.notifications.at(-2)[0], /Registro non salvabile/);
     assert.equal(fs.readFileSync(path.join(h.temp, '.pi/anti-amnesia/cards/test-session-uuid.md'), 'utf8'), card);
     assert.deepEqual(fs.readdirSync(path.dirname(registry)).filter((name) => name.includes('.tmp')), []);
@@ -350,29 +350,29 @@ test('delete blocks traversal and invalidates the active memory', async () => {
   try {
     const sentinel = path.join(h.temp, '.pi/foreign.md');
     fs.writeFileSync(sentinel, 'must survive');
-    await h.tools.get('carta_memoria').execute('id', { testo: card }, undefined, undefined, h.ctx);
-    await h.commands.get('carta').handler('delete ../../foreign', h.ctx);
+    await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
+    await h.commands.get('card').handler('delete ../../foreign', h.ctx);
     assert.equal(fs.readFileSync(sentinel, 'utf8'), 'must survive');
-    await h.commands.get('carta').handler('delete test-session-uuid', h.ctx);
+    await h.commands.get('card').handler('delete test-session-uuid', h.ctx);
     assert.equal(fs.existsSync(path.join(h.temp, '.pi/anti-amnesia/cards/test-session-uuid.md')), false);
     const bootstrap = await h.handlers.get('before_agent_start')({ prompt: 'continua', systemPrompt: 'SYS', systemPromptOptions: { cwd: h.temp } });
     assert.match(bootstrap.message.content, /BOOTSTRAP/);
-    assert.equal((await h.tools.get('carta_memoria').execute('read', {}, undefined, undefined, h.ctx)).details.chars, 0);
+    assert.equal((await h.tools.get('memory_card').execute('read', {}, undefined, undefined, h.ctx)).details.chars, 0);
   } finally { cleanup(h); }
 });
 
 test('purge invalidates an old active card and never interprets unsafe registry keys as paths', async () => {
   const h = await harness();
   try {
-    await h.tools.get('carta_memoria').execute('id', { testo: card }, undefined, undefined, h.ctx);
+    await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
     const registry = path.join(h.temp, '.pi/anti-amnesia/registry.json');
     const data = JSON.parse(fs.readFileSync(registry, 'utf8'));
     data.cards['test-session-uuid'].updatedAt = Date.now() - 7200_000;
     data.cards['../../foreign'] = { ...data.cards['test-session-uuid'] };
     fs.writeFileSync(registry, JSON.stringify(data));
-    await h.commands.get('carta').handler('purge 1', h.ctx);
+    await h.commands.get('card').handler('purge 1', h.ctx);
     assert.equal(fs.existsSync(path.join(h.temp, '.pi/anti-amnesia/cards/test-session-uuid.md')), false);
-    assert.equal((await h.tools.get('carta_memoria').execute('read', {}, undefined, undefined, h.ctx)).details.chars, 0);
+    assert.equal((await h.tools.get('memory_card').execute('read', {}, undefined, undefined, h.ctx)).details.chars, 0);
   } finally { cleanup(h); }
 });
 
@@ -380,7 +380,7 @@ test('unknown structured headings do not leak into active checkpoint injections'
   const h = await harness();
   try {
     const mixed = '## Sempre valido\nRuolo dev\n## Lavoro attivo\nProssimo test invoice\n## Dettagli clienti\nNon diffondere il contatto';
-    await h.tools.get('carta_memoria').execute('id', { testo: mixed }, undefined, undefined, h.ctx);
+    await h.tools.get('memory_card').execute('id', { text: mixed }, undefined, undefined, h.ctx);
     for (let i = 0; i < 5; i++) await h.handlers.get('turn_end')();
     const heartbeat = await h.handlers.get('context')({ messages: [{ role: 'user', content: 'continua' }] });
     assert.match(heartbeat.messages.at(-1).content, /Prossimo test invoice/);
@@ -391,12 +391,12 @@ test('unknown structured headings do not leak into active checkpoint injections'
 test('old persistent card messages are removed from model context and manual refresh is fresh', async () => {
   const h = await harness();
   try {
-    await h.tools.get('carta_memoria').execute('id', { testo: card }, undefined, undefined, h.ctx);
+    await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
     const old = { role: 'custom', customType: 'anti-amnesia', content: 'OLD WRONG TASK' };
     const input = [{ role: 'user', content: 'continua' }, old];
     const cleaned = await h.handlers.get('context')({ messages: input });
     assert.deepEqual(cleaned.messages, [input[0]]);
-    await h.commands.get('carta').handler('ora', h.ctx);
+    await h.commands.get('card').handler('now', h.ctx);
     const refreshed = await h.handlers.get('context')({ messages: input });
     assert.doesNotMatch(JSON.stringify(refreshed.messages), /OLD WRONG TASK/);
     assert.match(refreshed.messages.at(-1).content, /Riparare API pagamenti/);
@@ -407,7 +407,7 @@ test('old persistent card messages are removed from model context and manual ref
 test('short autonomous heartbeat repeats active checkpoint before the full refresh', async () => {
   const h = await harness();
   try {
-    await h.tools.get('carta_memoria').execute('id', { testo: card }, undefined, undefined, h.ctx);
+    await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
     for (let i = 0; i < 5; i++) await h.handlers.get('turn_end')();
     const heartbeat = await h.handlers.get('context')({ messages: [{ role: 'user', content: 'ok' }] });
     assert.match(heartbeat.messages.at(-1).content, /CHECKPOINT LAVORO ATTIVO/);
@@ -420,23 +420,23 @@ test('short autonomous heartbeat repeats active checkpoint before the full refre
 test('scheduled refresh and review run without fresh user keywords', async () => {
   const h = await harness();
   try {
-    await h.tools.get('carta_memoria').execute('id', { testo: card, ogni_turni: 1 }, undefined, undefined, h.ctx);
+    await h.tools.get('memory_card').execute('id', { text: card, everyTurns: 1 }, undefined, undefined, h.ctx);
     await h.handlers.get('turn_end')();
     const next = await h.handlers.get('context')({ messages: [{ role: 'user', content: 'ok' }] });
     assert.match(next.messages.at(-1).content, /refresh periodico/);
     assert.match(next.messages.at(-1).content, /prossimo test invoice/);
     assert.doesNotMatch(next.messages.at(-1).content, /Vecchia campagna CRM/);
-    await h.handlers.get('turn_end')(); // target casuale fra 1 e 2 turni
+    await h.handlers.get('turn_end')(); // random target between 1 and 2 turns
     const review = await h.handlers.get('context')({ messages: [{ role: 'user', content: 'continua' }] });
     assert.match(review.messages.at(-1).content, /RIVEDI CARTA/);
     assert.match(review.messages.at(-1).content, /prossimo test invoice/);
   } finally { cleanup(h); }
 });
 
-// ---- i18n: il prompt di bootstrap deve essere completo in ogni lingua ----
-// I cataloghi sono caricati a session_start, quindi la lingua va forzata PRIMA
-// dell'harness. Se una chiave di array e' sbagliata, senza questi test il prompt
-// perderebbe righe in silenzio.
+// ---- i18n: the bootstrap prompt must be complete in every language ----
+// The catalogs are loaded at session_start, so the language must be forced BEFORE
+// the harness. If an array key is wrong, without these tests the prompt would
+// lose lines silently.
 
 async function bootstrapIn(lang) {
   const previous = process.env.PI_ANTI_AMNESIA_LANG;
@@ -456,27 +456,27 @@ async function bootstrapIn(lang) {
 
 test('the bootstrap prompt is complete in Italian', async () => {
   const out = await bootstrapIn('it');
-  assert.doesNotMatch(out, /missing i18n key/, 'nessuna chiave i18n deve mancare');
-  assert.match(out, /Lavoro attivo/, 'titolo sezione in italiano');
-  assert.match(out, /carta_memoria\(\{/, 'esempio di invocazione presente');
-  assert.match(out, /## Sempre valido/, 'istruzione sulla sezione stabile presente');
-  assert.match(out, /## Lavoro attivo/, 'istruzione sul checkpoint presente');
-  assert.match(out, /## Topic/, 'istruzione sui topic presente');
-  assert.match(out, /annoebbiato|annebbiato/, 'chiusura presente');
+  assert.doesNotMatch(out, /missing i18n key/, 'no i18n key must be missing');
+  assert.match(out, /Lavoro attivo/, 'section title in Italian');
+  assert.match(out, /memory_card\(\{/, 'invocation example present');
+  assert.match(out, /## Sempre valido/, 'instruction on the stable section present');
+  assert.match(out, /## Lavoro attivo/, 'instruction on the checkpoint present');
+  assert.match(out, /## Topic/, 'instruction on topics present');
+  assert.match(out, /annebbiato/, 'closing present');
 });
 
 test('the bootstrap prompt is complete in English', async () => {
   const out = await bootstrapIn('en');
-  assert.doesNotMatch(out, /missing i18n key/, 'nessuna chiave i18n deve mancare');
-  assert.match(out, /Active work/, 'titolo sezione in inglese');
-  assert.doesNotMatch(out, /Lavoro attivo/, 'nessun residuo italiano');
-  assert.match(out, /## Always valid/, 'istruzione sulla sezione stabile presente');
-  assert.match(out, /## Active work/, 'istruzione sul checkpoint presente');
-  assert.match(out, /## Topic/, 'istruzione sui topic presente');
+  assert.doesNotMatch(out, /missing i18n key/, 'no i18n key must be missing');
+  assert.match(out, /Active work/, 'section title in English');
+  assert.doesNotMatch(out, /Lavoro attivo/, 'no Italian leftovers');
+  assert.match(out, /## Always valid/, 'instruction on the stable section present');
+  assert.match(out, /## Active work/, 'instruction on the checkpoint present');
+  assert.match(out, /## Topic/, 'instruction on topics present');
 });
 
 test('both languages produce the same number of prompt lines', async () => {
   const it = (await bootstrapIn('it')).split('\n');
   const en = (await bootstrapIn('en')).split('\n');
-  assert.equal(it.length, en.length, 'una lingua non deve perdere righe rispetto all\'altra');
+  assert.equal(it.length, en.length, 'one language must not lose lines against the other');
 });

@@ -38,14 +38,14 @@
     "helperIncompatible": "Anti-amnesia: incompatible topic-scope helper; restart Pi.",
     "exactlyOneActive": "Exactly one '## {active}' section is required: migrate the card before updating the checkpoint.",
     "sessionIsolated": "The card is isolated per session: reading or writing a key other than the active one is not allowed.",
-    "intervalRange": "every_turni must be between 1 and {max}: card left unchanged.",
-    "textOrActive": "Pass either testo or lavoro_attivo, not both.",
+    "intervalRange": "everyTurns must be between 1 and {max}: card left unchanged.",
+    "textOrActive": "Pass either text or activeWork, not both.",
     "needCardAndCheckpoint": "An existing card and a non-empty checkpoint are required.",
     "cardTooLong": "Card too long ({len} > {max} chars). Compress it.",
     "cardUnchanged": "Previous card left unchanged: write failed: {err}",
-    "invalidKey": "Invalid card key: use a key listed by /carta list.",
-    "usageEveryN": "Usage: /carta ogni <N turns>, N between 1 and {max}",
-    "usagePurge": "Usage: /carta purge <positive hours>",
+    "invalidKey": "Invalid card key: use a key listed by /card list.",
+    "usageEveryN": "Usage: /card every <N turns>, N between 1 and {max}",
+    "usagePurge": "Usage: /card purge <positive hours>",
     "gateFailed": "Anti-amnesia: GATE FAILED after {attempts} attempts (channel: {channel}). Violations: {violations}",
     "regenerateCancelled": "Regeneration cancelled: {err}",
     "bootstrapCancelled": "Bootstrap cancelled: {err}",
@@ -55,16 +55,16 @@
   },
   "warn": {
     "registryNotSaveable": "Anti-amnesia: registry not saveable; card loaded but metadata not persisted.",
-    "previousCardFound": "Anti-amnesia: previous card found (last update {date}). Check with /carta.",
+    "previousCardFound": "Anti-amnesia: previous card found (last update {date}). Check with /card.",
     "revisionScheduled": "Anti-amnesia: review scheduled; topic-specific memory will be shown only when relevant.",
     "staleForcedGate": "Anti-amnesia: stale card, forced review. GATE ACTIVE.",
     "reinjectedGate": "Anti-amnesia: card re-injected after compaction ({reason}). GATE ACTIVE.",
     "nothingToInject": "No card to inject.",
     "nothingToCopy": "No card to copy.",
-    "bootstrapForced": "Bootstrap forced: personalize the draft and save this session's card with `carta_memoria`.",
+    "bootstrapForced": "Bootstrap forced: personalize the draft and save this session's card with `memory_card`.",
     "cardNotInRegistry": "Card \"{key}\" does not exist in the registry.",
     "purgeNothing": "No card older than {hours}h.",
-    "actionsHelp": "Actions: /carta, /carta rigenera, /carta ogni N, /carta on|off, /carta <channel> on|off (session_compact|system_prompt|periodico|random_review|gate), /carta ora, /carta progetto, /carta list, /carta delete <key>, /carta purge <hours>",
+    "actionsHelp": "Actions: /card, /card regenerate, /card every N, /card on|off, /card <channel> on|off (session_compact|system_prompt|periodic|randomReview|gate), /card now, /card project, /card list, /card delete <key>, /card purge <hours>",
     "cardAbsent": "Anti-amnesia [{key}]: card ABSENT. It will be requested on the next turn."
   },
   "info": {
@@ -81,50 +81,83 @@
     "channelNotSaveable": "Registry not saveable: channel applied in memory only.",
     "channelOnOff": "Channel {channel} {state} for [{key}].",
     "channelState": "Channel {channel}: {state} for [{key}].",
+    "channelCompact": "compaction (ephemeral)",
+    "channelPeriodic": "periodic every {turns} turns (ephemeral)",
+    "channelSystemPrompt": "system prompt",
+    "channelRandomReview": "random review",
     "cardReady": "Card ready: it will be re-injected on the next LLM call.",
     "copyCreated": "Archive copy created (it will not be auto-loaded; cards are per-session): {dest}",
     "noCards": "No card in the registry.",
     "cardsInRegistry": "Cards in the registry ({count}):\n{list}",
+    "registryLine": "  {key} — gen {generation}, {chars} char, updated {date}",
+    "neverUpdated": "never",
     "cardDeleted": "Card \"{key}\" deleted from the registry and from disk.",
     "purgeDone": "Purge: {removed} cards deleted (older than {hours}h).",
     "currentCard": "Current card ({chars} chars, origin: {origin}, key: {key}):\n\n{card}",
-    "noCardForKey": "No card present for key \"{key}\". Pass `testo` to create one.",
+    "noCardForKey": "No card present for key \"{key}\". Pass `text` to create one.",
     "cardSavedFull": "{saved}: {chars} chars, key \"{key}\", generation {generation}.\n",
     "cardFile": "File: {target}"
   },
   "tool": {
     "label": "Memory card",
-    "description": "Stores or reads the self-written anti-amnesia card: the exact text the extension will re-inject when your context is truncated. Omit testo to read the current card.",
-    "promptSnippet": "carta_memoria: store/read the self-written anti-amnesia card",
-    "guideline": "If you receive the anti-amnesia bootstrap, save the card right away with carta_memoria. In autonomous cycles update lavoro_attivo at each phase change, and write \"none\" when the work is done."
+    "description": "Stores or reads the self-written anti-amnesia card: the exact text the extension will re-inject when your context is truncated. Omit text to read the current card.",
+    "promptSnippet": "memory_card: store/read the self-written anti-amnesia card",
+    "guideline": "If you receive the anti-amnesia bootstrap, save the card right away with memory_card. In autonomous cycles update activeWork at each phase change, and write \"none\" when the work is done."
   },
   "param": {
-    "testo": "Complete card (full replacement). Omit to read the card, or use lavoro_attivo to update only the checkpoint.",
-    "lavoro_attivo": "Update ONLY the existing '## {active}' section, preserving all the others. Include objective, verified state, next step and blockers. Write \"none\" when the work is done.",
-    "ogni_turni": "Periodic re-injection interval (default 15).",
-    "ruolo": "Role label, informational only in the registry.",
-    "chiave": "Key of the current Pi session (cannot point to other sessions).",
-    "canale_session_compact": "session_compact channel (after compaction). Default ON.",
-    "canale_system_prompt": "system prompt channel (every turn). Default OFF.",
-    "canale_periodico": "Periodic channel (every N turns). Default ON.",
-    "canale_random_review": "Random review channel (random cycle). Default ON."
+    "text": "Complete card (full replacement). Omit to read the card, or use activeWork to update only the checkpoint.",
+    "activeWork": "Update ONLY the existing '## {active}' section, preserving all the others. Include objective, verified state, next step and blockers. Write \"none\" when the work is done.",
+    "everyTurns": "Periodic re-injection interval (default 15).",
+    "role": "Role label, informational only in the registry.",
+    "key": "Key of the current Pi session (cannot point to other sessions).",
+    "sessionCompactChannel": "session_compact channel (after compaction). Default ON.",
+    "systemPromptChannel": "system prompt channel (every turn). Default OFF.",
+    "periodicChannel": "Periodic channel (every N turns). Default ON.",
+    "randomReviewChannel": "Random review channel (random cycle). Default ON."
   },
   "command": {
-    "description": "Anti-amnesia card: /carta | /carta rigenera | /carta ogni N | /carta on|off | /carta <channel> on|off | /carta ora | /carta progetto"
+    "description": "Anti-amnesia card: /card | /card regenerate | /card every N | /card on|off | /card <channel> on|off | /card now | /card project"
   },
   "scope": {
     "unclassifiedHint": "[Unclassified ## sections excluded: {list}. Migrate them to '{always}', '{active}' or '{topic}: ...']",
     "legacyHint": "\n[Legacy card with no sections: if the task changes, update the card; do not act on superseded instructions.]",
     "checkpointHint": "\n[This is a session checkpoint, not a new request: verify the real state before acting.]"
   },
+  "widget": {
+    "cardAbsent": "CARD {label} absent — bootstrap on the next turn",
+    "title": "CARD {label}",
+    "cardInfo": "{chars} char · {origin} · ",
+    "compactDown": "compaction↓ (ephemeral)",
+    "compactOff": "compaction off",
+    "periodicOn": "every {turns}t (in {remaining})",
+    "periodicOff": "periodic off",
+    "reviewOn": "review (in {remaining}t)",
+    "reviewOff": "review off",
+    "systemPrompt": "sysprompt",
+    "systemPromptOff": "sysprompt off",
+    "eta": "eta: {age}",
+    "disabled": "DISABLED",
+    "gate": "GATE {attempts}/{max} ({channel})",
+    "violations": "VIOLATIONS: {count}"
+  },
+  "gate": {
+    "header": "GATE {attempts}/{max}",
+    "confirm": "Mandatory confirmation: reply ONLY with the exact format:",
+    "format": "[CARD OK] key={key} role={role} turn={turn}",
+    "relevantMemory": "Relevant memory ({chars} char):",
+    "noContent": "(no content applicable to the current topic)",
+    "noRole": "N/A",
+    "activeStatus": "GATE ACTIVE: channel={channel} turn={turn} attempts={attempts}/{max}",
+    "violationsLine": "Violations: {count}"
+  },
   "bootstrap": {
     "header": "[ANTI-AMNESIA · BOOTSTRAP]",
     "intro": [
       "You have just started: full context, known role. This is the only moment when",
-      "you can write a faithful memory card for yourself. Do it NOW with the `carta_memoria` tool,",
+      "you can write a faithful memory card for yourself. Do it NOW with the `memory_card` tool,",
       "before any other work."
     ],
-    "draftLoaded": "You have loaded the cantiere DEFAULT DRAFT ({path}), which is not your own card: personalize it with the real role, session and project, then store it with `carta_memoria`.",
+    "draftLoaded": "You have loaded the project DEFAULT DRAFT ({path}), which is not your own card: personalize it with the real role, session and project, then store it with `memory_card`.",
     "detected": "Data detected by Pi (use it as truth, do not invent):",
     "cwd": "  cwd: {cwd}",
     "rolePromptLoaded": "  role/prompt: {value}",
@@ -136,14 +169,14 @@
     "keyNotice": [
       "The card will be saved with the key isolated to the current session.",
       "Do not pass a different key; state the real role, not the full prompt text.",
-      "  carta_memoria({ testo: \"...\", ruolo: \"<effective role>\" })"
+      "  memory_card({ text: \"...\", role: \"<effective role>\" })"
     ],
     "structure": "Structure the card in Markdown sections. The user request may be just \"continue\":",
     "sectionAlways": "  ## {always} — role, stable rules and absolute paths to re-read.",
     "sectionActive": "  ## {active} — objective, verified state, next step, blockers, concrete files.",
     "sectionActiveNote": [
       "     Write \"none\" if the work is done. Update it at every phase change with",
-      "     carta_memoria({ lavoro_attivo: \"objective; verified state; next step; blockers\" })."
+      "     memory_card({ activeWork: \"objective; verified state; next step; blockers\" })."
     ],
     "sectionTopic": "  ## {topic}: word1, word2 — ARCHIVED/inactive notes, only for explicit requests.",
     "topicWarning": "  Do not hide the active work under {topic}: it does not depend on the last prompt's words.",
@@ -159,11 +192,12 @@
     "reasonPostCompact": "after compaction — realign before acting",
     "reasonPeriodic": "periodic refresh (turn {turns})",
     "reasonScheduled": "scheduled review",
+    "reasonPermanent": "permanent card",
     "heartbeatHeader": "[ANTI-AMNESIA · ACTIVE WORK CHECKPOINT]",
     "heartbeatFooter": "[Session reminder: verify the real state before the next step.]",
     "randomReview": [
       "[REVIEW THE CARD] Check objective, verified state, next step and blockers of {active}.",
-      "If something changed, use `carta_memoria({ lavoro_attivo: \"...\" })`;",
+      "If something changed, use `memory_card({ activeWork: \"...\" })`;",
       "do not reactivate archived {topic} notes without an explicit request."
     ]
   },
@@ -171,7 +205,18 @@
     "on": "Anti-amnesia [{key}] — ACTIVE",
     "off": "Anti-amnesia [{key}] — DISABLED",
     "cardLine": "  card: {chars} chars, origin {origin}{draft}, generation {generation}",
-    "draftNote": " (DRAFT: personalize with carta_memoria)",
-    "notOnDisk": "  (not on disk)"
+    "draftNote": " (DRAFT: personalize with memory_card)",
+    "notOnDisk": "  (not on disk)",
+    "ephemeral": "ephemeral",
+    "channelOn": "on",
+    "channelOff": "off",
+    "sessionCompact": "  session_compact: {state}",
+    "systemPrompt": "  system_prompt: {state}",
+    "periodic": "  periodic: {state}",
+    "periodicOn": "ephemeral every {turns} turns (in {remaining})",
+    "randomReview": "  random_review: {state}",
+    "gate": "  gate: {state}",
+    "gateViolations": " (violations: {count})",
+    "turns": "  turns elapsed: {turns}"
   }
 }

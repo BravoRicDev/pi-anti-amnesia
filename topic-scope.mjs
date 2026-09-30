@@ -13,7 +13,7 @@ const DEFAULT_ALIASES = {
 };
 
 const STOP_WORDS = new Set([
-  // italiano
+  // Italian
   'alla', 'allo', 'agli', 'alle', 'della', 'dello', 'delle', 'degli', 'nella', 'nello', 'nelle', 'negli',
   'dalla', 'dallo', 'dalle', 'dagli', 'con', 'per', 'tra', 'fra', 'che', 'come', 'sono', 'dopo', 'prima',
   'questa', 'questo', 'quello', 'dove', 'quando', 'anche', 'sempre', 'solo', 'tutto', 'tutti', 'ruolo',
@@ -53,7 +53,7 @@ function optsOf(opts) {
 }
 
 function tokens(text, locale) {
-  // API pubblica: un userText non-stringo non deve far esplodere il chiamante.
+  // Public API: a non-string userText must not blow up the caller.
   if (typeof text !== 'string') return new Set();
   return new Set(
     (text.toLocaleLowerCase(locale).match(/[\p{L}\p{N}][\p{L}\p{N}_-]{2,}/gu) ?? []).filter(
@@ -64,13 +64,13 @@ function tokens(text, locale) {
 
 function parseCard(text, opts) {
   const o = optsOf(opts);
-  // Una carta non-stringa non e' una carta: si tratta come legacy vuota invece
-  // di propagare un TypeError dentro l'hook context.
+  // A non-string card is not a card: treat it as empty legacy instead
+  // of propagating a TypeError inside the hook context.
   if (typeof text !== 'string') {
     return { always: [], active: [], topical: [], unclassified: [], legacy: '' };
   }
-  // Costruisci le alternanze una volta sola: derivare una regex combinata
-  // slicedando il .source di altre regex produce gruppi non bilanciati.
+  // Build the alternations once: deriving a combined regex by slicing the
+  // .source of other regexes produces unbalanced groups.
   const alwaysAlt = alternation(o.aliases.always, DEFAULT_ALIASES.always);
   const activeAlt = alternation(o.aliases.active, DEFAULT_ALIASES.active);
   const topicAlt = alternation(o.aliases.topic, DEFAULT_ALIASES.topic);
@@ -158,12 +158,12 @@ export function replaceActiveCheckpoint(card, checkpoint, opts) {
     ),
   ];
   if (headings.length !== 1) {
-    // SAFETY: il template arriva dal catalogo tradotto; se manca si cade sul
-    // messaggio italiano legacy, cosi' l'errore resta comunque leggibile.
+    // SAFETY: the template comes from the translated catalog; if it is missing
+    // we fall back to an English message, so the error is still readable.
     throw new Error(
       o.exactlyOneActive
         ? o.exactlyOneActive.replace('{active}', o.activeTitle)
-        : `Serve esattamente una sezione ## ${o.activeTitle}: migra la carta prima di aggiornare il checkpoint.`,
+        : `Exactly one '## ${o.activeTitle}' section is required: migrate the card before updating the checkpoint.`,
     );
   }
   const heading = headings[0];

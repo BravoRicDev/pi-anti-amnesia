@@ -1,10 +1,10 @@
 {
   "language": "auto",
   "baseCard": "",
-  "canalePeriodico": true,
-  "canaleRandomReview": true,
-  "periodico": "effimero",
-  "ogniTurni": 15,
+  "periodicChannel": true,
+  "randomReviewChannel": true,
+  "periodic": "ephemeral",
+  "everyTurns": 15,
   "onCompact": true,
-  "compaction": "effimero"
+  "compaction": "ephemeral"
 }

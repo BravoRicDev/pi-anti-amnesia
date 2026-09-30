@@ -12,7 +12,7 @@ export interface UserMessage {
   content?: unknown;
 }
 
-/** Alias delle intestazioni di sezione accettate dal parser (IT + EN). */
+/** Section heading aliases accepted by the parser (IT + EN). */
 export interface SectionAliases {
   always: string[];
   active: string[];
@@ -20,16 +20,16 @@ export interface SectionAliases {
 }
 
 /**
- * Opzioni di localizzazione. Passale sempre: senza, il parser ricade sui
- * default italiani per compatibilita' con le carte gia' scritte.
+ * Localization options. Always pass them: without, the parser falls back to
+ * the Italian defaults for compatibility with already-written cards.
  */
 export interface ScopeOptions {
   aliases?: SectionAliases;
-  /** Titolo canonico della sezione attiva, per i messaggi di errore. */
+  /** Canonical title of the active section, for error messages. */
   activeTitle?: string;
-  /** Messaggio tradotto per 'una sola sezione attiva', con {active}. */
+  /** Translated message for 'exactly one active section', with {active}. */
   exactlyOneActive?: string;
-  /** Locale per il matching dei token, es. 'it-IT' | 'en-US'. */
+  /** Locale for token matching, e.g. 'it-IT' | 'en-US'. */
   locale?: string;
 }
 

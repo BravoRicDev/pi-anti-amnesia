@@ -1,7 +1,7 @@
 # Memory card — template to personalise
 
 This template contains no facts about the current session. Replace the placeholders
-with verified information only, then store it with `carta_memoria({ testo: "...", ruolo: "..." })`.
+with verified information only, then store it with `memory_card({ text: "...", role: "..." })`.
 Never copy rules from other roles or plans from old projects.
 
 ## Always valid

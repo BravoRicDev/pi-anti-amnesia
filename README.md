@@ -25,7 +25,7 @@ was true.
 - A key other than the active one is rejected — a session cannot read or write another
   session's memory.
 - Project cards are never loaded as active memory: they may belong to another role or chat.
-- The shared draft is only readable on an explicit `/carta bootstrap`.
+- The shared draft is only readable on an explicit `/card bootstrap`.
 
 ### Injection channels
 
@@ -33,8 +33,8 @@ was true.
 |---|---|
 | `session_compact` | after the context is compacted |
 | `system_prompt` | every turn (off by default) |
-| `periodico` | every N turns |
-| `random_review` | on a random cadence |
+| `periodic` | every N turns |
+| `randomReview` | on a random cadence |
 | `gate` | requires an explicit confirmation before the agent proceeds |
 
 One card is injected per LLM call, even when compaction, the periodic timer and the review
@@ -100,14 +100,14 @@ half-finished translation cannot ship silently.
 {
   "language": "auto",
   "baseCard": "",
-  "ogniTurni": 15,
+  "everyTurns": 15,
   "bootstrap": true,
-  "canalePeriodico": true,
-  "canaleRandomReview": true,
-  "canaleSystemPrompt": false,
+  "periodicChannel": true,
+  "randomReviewChannel": true,
+  "systemPromptChannel": false,
   "onCompact": true,
   "gate": false,
-  "attivo": true
+  "active": true
 }
 ```
 
@@ -115,7 +115,7 @@ half-finished translation cannot ship silently.
 |---|---|
 | `language` | `"auto"`, `"en"` or `"it"` |
 | `baseCard` | path to your own base card; empty uses the bundled `cards/base.<lang>.md` |
-| `ogniTurni` | periodic re-injection interval |
+| `everyTurns` | periodic re-injection interval |
 
 Precedence, lowest to highest: bundled defaults → `config.json` → project config
 (`<project>/.pi/anti-amnesia/config.json`).
@@ -133,26 +133,26 @@ Italian-locale install loads the Italian template.
 ### Commands
 
 ```
-/carta                          status + active channels
-/carta rigenera                 archive the card and bootstrap again
-/carta ogni N                   periodic interval
-/carta on | off                 master switch
-/carta <channel> on | off       session_compact | system_prompt | periodico |
-                                random_review | gate
-/carta bootstrap                force a bootstrap
-/carta ora                      inject the card now
-/carta progetto                 write an archive copy (not auto-loaded)
-/carta list | delete <key> | purge <hours>
+/card                          status + active channels
+/card regenerate                archive the card and bootstrap again
+/card every N                   periodic interval
+/card on | off                  master switch
+/card <channel> on | off        session_compact | system_prompt | periodic |
+                                randomReview | gate
+/card bootstrap                 force a bootstrap
+/card now                       inject the card now
+/card project                   write an archive copy (not auto-loaded)
+/card list | delete <key> | purge <hours>
 ```
 
-### Tool `carta_memoria`
+### Tool `memory_card`
 
-- `carta_memoria()` reads the current session's card.
-- `carta_memoria({ testo, ruolo })` creates or replaces the card.
-- `carta_memoria({ lavoro_attivo: "..." })` updates **only** the `## Active work`
+- `memory_card()` reads the current session's card.
+- `memory_card({ text, role })` creates or replaces the card.
+- `memory_card({ activeWork: "..." })` updates **only** the `## Active work`
   checkpoint, preserving every other section verbatim, and refuses a legacy card with an
   ambiguous checkpoint rather than erasing a section by accident. Write
-  `lavoro_attivo: "none"` when the work is done.
+  `activeWork: "none"` when the work is done.
 
 Cards are written to a temporary file and published only after a successful write.
 
@@ -204,7 +204,7 @@ mentre sapeva ancora cosa fosse vero.
   scrivere la memoria di un'altra.
 - Le carte di progetto non vengono mai caricate come memoria attiva: potrebbero
   appartenere a un altro ruolo o chat.
-- La bozza condivisa è leggibile solo su `/carta bootstrap` esplicito.
+- La bozza condivisa è leggibile solo su `/card bootstrap` esplicito.
 
 ### Canali di iniezione
 
@@ -212,8 +212,8 @@ mentre sapeva ancora cosa fosse vero.
 |---|---|
 | `session_compact` | dopo la compattazione del contesto |
 | `system_prompt` | a ogni turno (spento di default) |
-| `periodico` | ogni N turni |
-| `random_review` | a caso |
+| `periodic` | ogni N turni |
+| `randomReview` | a caso |
 | `gate` | richiede una conferma esplicita prima di procedere |
 
 Una sola carta iniettata per chiamata LLM, anche quando compattazione, timer periodico e
@@ -280,14 +280,14 @@ di test, così una traduzione a metà non può essere pubblicata in silenzio.
 {
   "language": "auto",
   "baseCard": "",
-  "ogniTurni": 15,
+  "everyTurns": 15,
   "bootstrap": true,
-  "canalePeriodico": true,
-  "canaleRandomReview": true,
-  "canaleSystemPrompt": false,
+  "periodicChannel": true,
+  "randomReviewChannel": true,
+  "systemPromptChannel": false,
   "onCompact": true,
   "gate": false,
-  "attivo": true
+  "active": true
 }
 ```
 
@@ -295,7 +295,7 @@ di test, così una traduzione a metà non può essere pubblicata in silenzio.
 |---|---|
 | `language` | `"auto"`, `"en"` o `"it"` |
 | `baseCard` | percorso della tua carta base; vuoto usa `cards/base.<lingua>.md` incluso |
-| `ogniTurni` | intervallo di reiniezione periodica |
+| `everyTurns` | intervallo di reiniezione periodica |
 
 Precedenza, dalla più bassa alla più alta: default inclusi → `config.json` → config di
 progetto (`<progetto>/.pi/anti-amnesia/config.json`).
@@ -313,26 +313,26 @@ installazione con locale italiano carica il modello italiano.
 ### Comandi
 
 ```
-/carta                          stato + canali attivi
-/carta rigenera                 archivia la carta e riavvia il bootstrap
-/carta ogni N                   intervallo periodico
-/carta on | off                 interruttore generale
-/carta <canale> on | off        session_compact | system_prompt | periodico |
-                                random_review | gate
-/carta bootstrap                forza il bootstrap
-/carta ora                      inietta la carta adesso
-/carta progetto                 crea una copia archivio (non caricata)
-/carta list | delete <chiave> | purge <ore>
+/card                          stato + canali attivi
+/card regenerate                archivia la carta e riavvia il bootstrap
+/card every N                   intervallo periodico
+/card on | off                  interruttore generale
+/card <canale> on | off         session_compact | system_prompt | periodic |
+                                randomReview | gate
+/card bootstrap                 forza il bootstrap
+/card now                       inietta la carta adesso
+/card project                   crea una copia archivio (non caricata)
+/card list | delete <chiave> | purge <ore>
 ```
 
-### Tool `carta_memoria`
+### Tool `memory_card`
 
-- `carta_memoria()` legge la carta della sessione corrente.
-- `carta_memoria({ testo, ruolo })` crea o sostituisce la carta.
-- `carta_memoria({ lavoro_attivo: "..." })` aggiorna **solo** il checkpoint
+- `memory_card()` legge la carta della sessione corrente.
+- `memory_card({ text, role })` crea o sostituisce la carta.
+- `memory_card({ activeWork: "..." })` aggiorna **solo** il checkpoint
   `## Lavoro attivo`, preservando alla lettera ogni altra sezione, e rifiuta una carta
   legacy con checkpoint ambiguo invece di cancellare una sezione per errore. Scrivi
-  `lavoro_attivo: "nessuno"` a lavoro finito.
+  `activeWork: "nessuno"` a lavoro finito.
 
 Le carte sono scritte su file temporaneo e pubblicate solo dopo una scrittura riuscita.
 

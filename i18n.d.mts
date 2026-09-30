@@ -20,8 +20,8 @@ export const FALLBACK: string;
 export function isSupported(lang: string): boolean;
 
 /**
- * Risolve la lingua attiva. Chiamare UNA volta e congelare il risultato.
- * @param configured  valore di config.language ('auto' o un codice lingua)
+ * Resolves the active language. Call ONCE and freeze the result.
+ * @param configured  config.language value ('auto' or a language code)
  */
 export function resolveLanguage(
   configured?: string | null,
@@ -34,8 +34,8 @@ export function makeT(lang: string): Translator;
 
 export function interpolateAll(lines: string[], vars: InterpolationVars): string[];
 
-/** Alias bilingui delle intestazioni: una carta resta editabile dopo il cambio lingua. */
+/** Bilingual heading aliases: a card stays editable after a language change. */
 export function sectionAliases(lang: string): SectionAliases;
 
-/** Titoli canonici delle sezioni per la lingua attiva. */
+/** Canonical section titles for the active language. */
 export function sectionTitles(lang: string): SectionTitles;

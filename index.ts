@@ -1,45 +1,45 @@
 /**
- * pi-anti-amnesia — Il Custode della carta di memoria auto-scritta.
+ * pi-anti-amnesia — The Keeper of the self-written memory card.
  *
- * PROBLEMA
- *   Le strategie anti-amnesia scritte nei prompt ("dopo ogni compattazione
- *   rileggi base.md") vivono in *prompt-space*: chiedono al modello di
- *   accorgersi della compattazione e di obbedire. Dopo una compaction il
- *   modello spesso non sa nemmeno che e' avvenuta. Compliance soft = fallisce.
+ * PROBLEM
+ *   The anti-amnesia strategies written into prompts ("after every compaction
+ *   re-read base.md") live in *prompt-space*: they ask the model to notice
+ *   the compaction and obey. After a compaction the model often does not even
+ *   know it happened. Soft compliance = it fails.
  *
- * SOLUZIONE
- *   Spostare l'anti-amnesia in *hook-space*: iniezione deterministica, non
- *   negoziabile, esattamente come fa la compressione di Pi.
+ * SOLUTION
+ *   Move anti-amnesia into *hook-space*: deterministic injection, not
+ *   negotiable, exactly like Pi's own compaction.
  *
- *   Fase 1 BOOTSTRAP  — a sessione nuova, mentre l'agente e' "fresco"
- *                       (contesto completo, sa il suo ruolo), gli si chiede di
- *                       scriversi DA SOLO la carta: testo verbatim con ruolo
- *                       esatto e path assoluti. Nessuna parafrasi, nessuna perdita.
- *   Fase 2 CARTA      — l'agente la deposita col tool `carta_memoria`.
- *                       L'estensione la persiste in un registro condiviso.
- *   Fase 3 CUSTODE    — l'estensione reinietta la carta per conto proprio,
- *                       senza piu' chiedere nulla al modello, su canali
- *                       INDIPENDENTI e configurabili:
- *                         a) onCompact         — dopo ogni compattazione (ancora)
- *                         b) canalePeriodico   — refresh ogni N turni
- *                         c) canaleSystemPrompt — presenza nel system prompt
- *                         d) canaleRandomReview — revisione a intervallo casuale
- *                         e) bootstrap         — chiede la carta a sessione nuova
- *                         f) gate              — conferma obbligatoria ([CARTA OK])
+ *   Phase 1 BOOTSTRAP — on a new session, while the agent is "fresh"
+ *                       (full context, knows its role), it is asked to write
+ *                       the card BY ITSELF: verbatim text with the exact role
+ *                       and absolute paths. No paraphrasing, no loss.
+ *   Phase 2 CARD      — the agent stores it with the `memory_card` tool.
+ *                       The extension persists it in a shared registry.
+ *   Phase 3 KEEPER    — the extension re-injects the card on its own,
+ *                       without asking the model anymore, over INDEPENDENT
+ *                       and configurable channels:
+ *                         a) onCompact         — after every compaction (still)
+ *                         b) periodicChannel   — refresh every N turns
+ *                         c) systemPromptChannel — presence in the system prompt
+ *                         d) randomReviewChannel — review on a random interval
+ *                         e) bootstrap         — asks for the card on a new session
+ *                         f) gate              — mandatory confirmation ([CARD OK])
  *
- *   DEFAULT: compattazione, refresh periodico e revisione casuale sono attivi.
- *   I contenuti delle carte vengono separati per topic: le regole permanenti
- *   restano disponibili, i dettagli topic-specifici entrano solo se pertinenti.
+ *   DEFAULT: compaction, periodic refresh and random review are on.
+ *   Card contents are split by topic: permanent rules stay available, the
+ *   topic-specific details come in only when relevant.
  *
- *   Il "fresco" e' verificabile: in `before_agent_start` Pi passa
- *   `systemPromptOptions` con `contextFiles` (path ASSOLUTI di base.md/AGENTS.md),
- *   `customPrompt` (ruolo), `cwd`. L'estensione usa quei dati come verita'
- *   di base da consegnare all'agente, cosi' la carta nasce ancorata al reale.
+ *   "Fresh" is verifiable: in `before_agent_start` Pi passes
+ *   `systemPromptOptions` with `contextFiles` (ABSOLUTE paths of base.md/AGENTS.md),
+ *   `customPrompt` (role), `cwd`. The extension uses that data as ground truth
+ *   to hand to the agent, so the card is born anchored to reality.
  *
- * REGISTRO (come i cronjob, gemello di ~/.pi/timers/active-timers.json)
- *   ~/.pi/anti-amnesia/registry.json      -> una entry per chiave/sessione
- *   ~/.pi/anti-amnesia/cards/<chiave>.md  -> carta isolata per sessione Pi
- *   <progetto>/.pi/anti-amnesia/config.json -> override dei canali di schedulazione
+ * REGISTRY (like cronjobs, twin of ~/.pi/timers/active-timers.json)
+ *   ~/.pi/anti-amnesia/registry.json      -> one entry per key/session
+ *   ~/.pi/anti-amnesia/cards/<key>.md     -> card isolated per Pi session
+ *   <project>/.pi/anti-amnesia/config.json -> override of the scheduling channels
  */
 
 import type { ExtensionAPI, ExtensionContext } from '@earendil-works/pi-coding-agent';
@@ -60,17 +60,17 @@ const CUSTOM_TYPE = 'anti-amnesia';
 const WIDGET_KEY = 'pi-anti-amnesia';
 const MAX_CARD_CHARS = 20000;
 const MAX_INTERVAL_TURNS = 1000;
-const GATE_MAX_TENTATIVI = 3;
-const FORMATO_CARTA_OK = /\[CARTA OK\] chiave=(\S+) ruolo=(\S+) turno=(\d+)/;
+const GATE_MAX_ATTEMPTS = 3;
+const CARD_OK_FORMAT = /\[CARD OK\] key=(\S+) role=(\S+) turn=(\d+)/;
 
 // __dirname equivalent in ESM: directory of this source file (the extension).
 const _EXT_DIR = path.dirname(fileURLToPath(import.meta.url));
-// Config globale condiviso (sincronizzato via PiAgent, co-located con l'estensione).
-// Precedenza: DEFAULTS ← global ← registry[chiave] ← project.
+// Shared global config (synced via PiAgent, co-located with the extension).
+// Precedence: DEFAULTS ← global ← registry[key] ← project.
 const GLOBAL_CONFIG = path.join(_EXT_DIR, 'config.json');
 
-// Seed condiviso, usato solo su richiesta esplicita di bootstrap.
-// Priorita': env -> config.baseCard -> carta inclusa per la lingua attiva -> legacy.
+// Shared seed, used only on an explicit bootstrap request.
+// Priority: env -> config.baseCard -> card bundled for the active language -> legacy.
 function draftCandidates(baseCard: string, lang: string): string[] {
   return [
     process.env.PI_ANTI_AMNESIA_DRAFT ?? '',
@@ -80,69 +80,69 @@ function draftCandidates(baseCard: string, lang: string): string[] {
   ].filter((p) => p.length > 0);
 }
 
-type Canale = 'effimero' | 'persistente';
+type Channel = 'ephemeral' | 'persistent';
 
 interface CardConfig {
-  /** Intervallo di reiniezione periodica, in turni. */
-  ogniTurni: number;
-  /** Abilita bootstrap Fase 1: chiede all'agente di scriversi la carta. */
+  /** Periodic re-injection interval, in turns. */
+  everyTurns: number;
+  /** Enables Phase 1 bootstrap: asks the agent to write its own card. */
   bootstrap: boolean;
-  /** Abilita iniezione nel system prompt (canale c). */
-  canaleSystemPrompt: boolean;
-  /** Abilita refresh periodico ogni N turni (canale b). */
-  canalePeriodico: boolean;
-  /** Abilita revisione casuale (canale casuale). */
-  canaleRandomReview: boolean;
-  /** Abilita iniezione dopo compattazione (canale a). */
+  /** Enables injection into the system prompt (channel c). */
+  systemPromptChannel: boolean;
+  /** Enables periodic refresh every N turns (channel b). */
+  periodicChannel: boolean;
+  /** Enables random review (random channel). */
+  randomReviewChannel: boolean;
+  /** Enables injection after compaction (channel a). */
   onCompact: boolean;
-  /** Abilita gate di conferma obbligatoria. */
+  /** Enables the mandatory-confirmation gate. */
   gate: boolean;
-  /** Interruttore generale. */
-  attivo: boolean;
-  /** Ruolo dichiarato nella carta (informativo). */
-  ruolo?: string;
+  /** Master switch. */
+  active: boolean;
+  /** Role declared in the card (informational). */
+  role?: string;
   cwd?: string;
-  generazione: number;
+  generation: number;
   updatedAt: number;
   chars: number;
-  /** Modalità legacy nel registro; i refresh programmati usano sempre context effimero. */
-  periodico: Canale;
-  /** Modalità legacy nel registro; la compattazione usa sempre context effimero. */
-  compaction: Canale;
-  /** 'auto' | 'it' | 'en'. 'auto' la deriva dal locale di sistema, congelata per sessione. */
+  /** Legacy mode in the registry; scheduled refreshes always use ephemeral context. */
+  periodic: Channel;
+  /** Legacy mode in the registry; compaction always uses ephemeral context. */
+  compaction: Channel;
+  /** 'auto' | 'it' | 'en'. 'auto' derives it from the system locale, frozen per session. */
   language: string;
-  /** Percorso esplicito di una carta base. Vuoto = usa cards/base.<lingua>.md inclusa. */
+  /** Explicit path of a base card. Empty = use the bundled cards/base.<lang>.md. */
   baseCard: string;
 }
 
 const DEFAULTS: CardConfig = {
-  ogniTurni: 15,
+  everyTurns: 15,
   bootstrap: true,
-  canaleSystemPrompt: false,
-  canalePeriodico: true,
-  canaleRandomReview: true,
+  systemPromptChannel: false,
+  periodicChannel: true,
+  randomReviewChannel: true,
   onCompact: true,
   gate: false,
-  attivo: true,
-  generazione: 0,
+  active: true,
+  generation: 0,
   updatedAt: 0,
   chars: 0,
-  // default effimero: nessun accumulo nel transcript, stessa copertura.
-  periodico: 'effimero',
-  // L'hook context garantisce consegna sul retry post-compattazione senza transcript stale.
-  compaction: 'effimero',
-  // 'auto' = deriva da PI_ANTI_AMNESIA_LANG / LC_ALL / LC_MESSAGES / LANG / Intl.
+  // ephemeral default: no accumulation in the transcript, same coverage.
+  periodic: 'ephemeral',
+  // The context hook guarantees delivery on the post-compaction retry without stale transcript.
+  compaction: 'ephemeral',
+  // 'auto' = derives from PI_ANTI_AMNESIA_LANG / LC_ALL / LC_MESSAGES / LANG / Intl.
   language: 'auto',
-  // Vuoto = usa cards/base.<lingua>.md inclusa nell'estensione.
+  // Empty = use cards/base.<lang>.md bundled with the extension.
   baseCard: '',
 };
 
 /**
- * Lingua grezza, letta PRIMA del merge completo e senza dipendere da `key`.
- * Gli argomenti sono in ordine di precedenza crescente: l'ultimo che dichiara
- * `language` vince, esattamente come nel merge { ...cfg, ...parsed }.
- * Senza questo, un `language` messo nella config di progetto verrebbe ignorato
- * in silenzio mentre ogni altra chiave di project config viene onorata.
+ * Raw language, read BEFORE the full merge and without depending on `key`.
+ * Arguments are in increasing precedence order: the last one declaring
+ * `language` wins, exactly like in the { ...cfg, ...parsed } merge.
+ * Without this, a `language` set in the project config would be silently
+ * ignored while every other project config key is honoured.
  */
 function readRawLanguage(...configPaths: string[]): string {
   let language = 'auto';
@@ -152,24 +152,24 @@ function readRawLanguage(...configPaths: string[]): string {
     try {
       const parsed = JSON.parse(raw) as { language?: unknown };
       if (typeof parsed.language === 'string') language = parsed.language;
-    } catch { /* config invalida: si ignora, come nel merge principale */ }
+    } catch { /* invalid config: ignored, as in the main merge */ }
   }
   return language;
 }
 
-// Mappa nome-canale (comando /carta) -> campo di configurazione.
-const CANALE_CAMPI: Record<
+// Channel-name map (/card command) -> configuration field.
+const CHANNEL_FIELDS: Record<
   string,
-  'onCompact' | 'canaleSystemPrompt' | 'canalePeriodico' | 'canaleRandomReview' | 'gate'
+  'onCompact' | 'systemPromptChannel' | 'periodicChannel' | 'randomReviewChannel' | 'gate'
 > = {
   session_compact: 'onCompact',
-  system_prompt: 'canaleSystemPrompt',
-  periodico: 'canalePeriodico',
-  random_review: 'canaleRandomReview',
+  system_prompt: 'systemPromptChannel',
+  periodic: 'periodicChannel',
+  randomReview: 'randomReviewChannel',
   gate: 'gate',
 };
 
-// ---------------------------------------------------------------- utilita'
+// ---------------------------------------------------------------- utilities
 
 function ensureDirs(): void {
   try {
@@ -212,7 +212,7 @@ function readRegistry(): Record<string, CardConfig> {
       return data.cards as Record<string, CardConfig>;
     }
   } catch {
-    /* registro corrotto: si riparte */
+    /* corrupt registry: start over from an empty one */
   }
   return {};
 }
@@ -222,7 +222,7 @@ function writeRegistry(cards: Record<string, CardConfig>): boolean {
   const temp = `${REGISTRY_FILE}.${process.pid}.${randomUUID()}.tmp`;
   try {
     writeText(temp, JSON.stringify({ version: 1, cards }, null, 2));
-    fs.renameSync(temp, REGISTRY_FILE); // mai esporre un JSON scritto a metà
+    fs.renameSync(temp, REGISTRY_FILE); // never expose a half-written JSON
     return true;
   } catch {
     try { fs.unlinkSync(temp); } catch { /* cleanup best effort */ }
@@ -230,7 +230,7 @@ function writeRegistry(cards: Record<string, CardConfig>): boolean {
   }
 }
 
-/** Lock cross-process su TUTTO il read-modify-write, non solo sul rename. */
+/** Cross-process lock over the WHOLE read-modify-write, not just the rename. */
 function withRegistryLock(update: () => boolean): boolean {
   ensureDirs();
   const lockPath = `${REGISTRY_FILE}.lock`;
@@ -240,7 +240,7 @@ function withRegistryLock(update: () => boolean): boolean {
     try {
       fd = fs.openSync(lockPath, 'wx', 0o600);
       try {
-        fs.writeSync(fd, `${process.pid}\n`); // diagnosi di lock orfani
+        fs.writeSync(fd, `${process.pid}\n`); // orphan lock diagnostics
       } catch {
         try { fs.closeSync(fd); fs.unlinkSync(lockPath); } catch { /* noop */ }
         return false;
@@ -248,7 +248,7 @@ function withRegistryLock(update: () => boolean): boolean {
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return false;
-      Atomics.wait(pause, 0, 0, 20); // attesa massima ~800 ms, poi errore esplicito
+      Atomics.wait(pause, 0, 0, 20); // max wait ~800 ms, then an explicit error
     }
   }
   if (fd === undefined) return false;
@@ -264,12 +264,12 @@ function withRegistryLock(update: () => boolean): boolean {
   return ok;
 }
 
-// ---------------------------------------------------------------- estensione
+// ---------------------------------------------------------------- extension
 
 export default function (pi: ExtensionAPI) {
   let ctxRef: ExtensionContext | undefined;
-  // /reload deve leggere la versione NUOVA dell'helper ESM: gli import statici
-  // possono restare nella cache del processo, rompendo persino carta_memoria.
+  // /reload must read the NEW version of the ESM helper: static imports
+  // can stay in the process cache, breaking even memory_card.
   let scope: typeof TopicScope | undefined;
   function currentScope(): typeof TopicScope {
     if (!scope) throw new Error(t('error.helperUninitialized'));
@@ -278,15 +278,15 @@ export default function (pi: ExtensionAPI) {
   let key = 'default';
   let card: string | null = null;
   let cardPath: string | null = null;
-  let cardOrigin: 'progetto' | 'globale' | 'memoria' | 'bozza' = 'globale';
+  let cardOrigin: 'project' | 'global' | 'memory' | 'draft' = 'global';
   let latestUserInput = '';
   let cfg: CardConfig = { ...DEFAULTS };
-  // Lingua congelata per tutta la sessione: l'LLM non deve mai vedere il
-  // contesto cambiare lingua a meta' conversazione (causa tipica: output ibrido).
+  // Language frozen for the whole session: the LLM must never see the
+  // context change language mid-conversation (typical cause: hybrid output).
   let lang = 'en';
   let t: (key: string, vars?: Record<string, string | number>) => string = (key) => `[${key}]`;
   let scopeOpts: Record<string, unknown> = {};
-  // Titoli canonici delle sezioni e catalogo grezzo, per i prompt composti.
+  // Canonical section titles and raw catalog, for the composed prompts.
   let sectionTitles = { always: 'Always valid', active: 'Active work', topic: 'Topic' };
   let scopeI18n: Record<string, unknown> = {};
   let interpolateAll: (lines: string[], vars: Record<string, string | number>) => string[] =
@@ -303,38 +303,38 @@ export default function (pi: ExtensionAPI) {
   let pendingRandomReview = false;
   let randomTarget = 0;
   let lastUpdateTurn = 0;
-  let gateAttivo: { canale: string; turno: number; tentativi: number } | null = null;
-  let gateViolazioni: number = 0;
+  let activeGate: { channel: string; turn: number; attempts: number } | null = null;
+  let gateViolations: number = 0;
   let gateLastViolationTurn = 0;
-  const GATE_COOLDOWN_TURNI = 5;
+  const GATE_COOLDOWN_TURNS = 5;
 
   let projectConfigPath = '';
 
   const globalCardPath = () => path.join(CARDS_DIR, `${key}.md`);
   const globalRegistry = () => readRegistry();
 
-  // ---- caricamento ----
+  // ---- loading ----
 
-  function loadCard(soloBozza = false): void {
-    if (!soloBozza) {
-      // Le carte di progetto non vengono caricate: potrebbero appartenere a un altro ruolo/chat.
+  function loadCard(draftOnly = false): void {
+    if (!draftOnly) {
+      // Project cards are not loaded: they may belong to another role/chat.
       const fromGlobal = readText(globalCardPath());
       if (fromGlobal && fromGlobal.trim()) {
         card = fromGlobal;
         cardPath = globalCardPath();
-        cardOrigin = 'globale';
+        cardOrigin = 'global';
         return;
       }
     }
-    // La bozza condivisa è caricabile solo durante un bootstrap esplicito.
-    // Mai reiniettarla come fallback silenzioso in chat prive di carta.
-    if (soloBozza) {
+    // The shared draft is loadable only during an explicit bootstrap.
+    // Never re-inject it as a silent fallback in chats with no card.
+    if (draftOnly) {
       for (const cand of draftCandidates(cfg.baseCard, lang)) {
         const draft = readText(cand);
         if (draft && draft.trim()) {
           card = draft;
           cardPath = cand;
-          cardOrigin = 'bozza';
+          cardOrigin = 'draft';
           return;
         }
       }
@@ -346,46 +346,46 @@ export default function (pi: ExtensionAPI) {
 
   function loadConfig(): void {
     cfg = { ...DEFAULTS };
-    // 1) Config globale condiviso (sincronizzato via PiAgent, co-located con l'estensione).
+    // 1) Shared global config (synced via PiAgent, co-located with the extension).
     const fromGlobal = readText(GLOBAL_CONFIG);
     if (fromGlobal) {
       try {
         const parsed = JSON.parse(fromGlobal);
         if (parsed && typeof parsed === 'object') cfg = { ...cfg, ...parsed };
-      } catch { /* config globale invalida: si ignora */ }
+      } catch { /* invalid global config: ignored */ }
     }
-    // 2) Registro della sessione (sovrascrive il globale).
+    // 2) Session registry (overrides the global one).
     const stored = globalRegistry()[key];
     cfg = { ...cfg, ...(stored ?? {}) };
-    // 3) Config di progetto (vince su tutto).
+    // 3) Project config (wins over everything).
     const fromProject = readText(projectConfigPath);
     if (fromProject) {
       try {
         const parsed = JSON.parse(fromProject);
         if (parsed && typeof parsed === 'object') cfg = { ...cfg, ...parsed };
-      } catch { /* config di progetto invalida: si ignora */ }
+      } catch { /* invalid project config: ignored */ }
     }
-    if (!Number.isFinite(cfg.ogniTurni) || cfg.ogniTurni < 1 || cfg.ogniTurni > MAX_INTERVAL_TURNS) cfg.ogniTurni = DEFAULTS.ogniTurni;
-    cfg.ogniTurni = Math.floor(cfg.ogniTurni);
-    for (const field of ['bootstrap', 'canaleSystemPrompt', 'canalePeriodico', 'canaleRandomReview', 'onCompact', 'gate', 'attivo'] as const) {
+    if (!Number.isFinite(cfg.everyTurns) || cfg.everyTurns < 1 || cfg.everyTurns > MAX_INTERVAL_TURNS) cfg.everyTurns = DEFAULTS.everyTurns;
+    cfg.everyTurns = Math.floor(cfg.everyTurns);
+    for (const field of ['bootstrap', 'systemPromptChannel', 'periodicChannel', 'randomReviewChannel', 'onCompact', 'gate', 'active'] as const) {
       if (typeof cfg[field] !== 'boolean') cfg[field] = DEFAULTS[field];
     }
-    if (cfg.periodico !== 'effimero' && cfg.periodico !== 'persistente') cfg.periodico = DEFAULTS.periodico;
-    if (cfg.compaction !== 'effimero' && cfg.compaction !== 'persistente') cfg.compaction = DEFAULTS.compaction;
-    if (typeof cfg.ruolo !== 'string') delete cfg.ruolo;
+    if (cfg.periodic !== 'ephemeral' && cfg.periodic !== 'persistent') cfg.periodic = DEFAULTS.periodic;
+    if (cfg.compaction !== 'ephemeral' && cfg.compaction !== 'persistent') cfg.compaction = DEFAULTS.compaction;
+    if (typeof cfg.role !== 'string') delete cfg.role;
     if (typeof cfg.cwd !== 'string') delete cfg.cwd;
   }
 
-  /** Impostazioni di installazione, non di sessione: non vanno nel registro. */
+  /** Install-wide settings, not session settings: they do not go into the registry. */
   const INSTALL_KEYS = ['language', 'baseCard'] as const;
 
   function persistConfig(cardWritten = false): boolean {
     return withRegistryLock(() => {
       const cards = globalRegistry();
-      // language/baseCard vivono in config.json e valgono per tutte le sessioni.
-      // Scriverli qui li congelerebbe: loadConfig fa vincere il registro sulla
-      // config globale, quindi un cambio successivo di config.json non avrebbe
-      // piu' effetto su questa sessione. Vanno esclusi, non sovrascritti.
+      // language/baseCard live in config.json and apply to every session.
+      // Writing them here would freeze them: loadConfig lets the registry win
+      // over the global config, so a later config.json change would no longer
+      // take effect on this session. They must be excluded, not overwritten.
       const snapshot = { ...cfg };
       for (const k of INSTALL_KEYS) delete snapshot[k];
       cards[key] = {
@@ -398,12 +398,12 @@ export default function (pi: ExtensionAPI) {
   }
 
   function pickRandomTarget(): number {
-    const N = cfg.ogniTurni;
-    return N + Math.floor(Math.random() * (N + 1)); // N … 2N inclusi
+    const N = cfg.everyTurns;
+    return N + Math.floor(Math.random() * (N + 1)); // N … 2N inclusive
   }
 
   function setIntervalTurns(value: number): void {
-    cfg.ogniTurni = Math.floor(value);
+    cfg.everyTurns = Math.floor(value);
     periodicTurns = 0;
     pendingPeriodic = false;
     pendingHeartbeat = false;
@@ -411,7 +411,7 @@ export default function (pi: ExtensionAPI) {
     randomTarget = turns + pickRandomTarget();
   }
 
-  /** Normalizza il content di un messaggio (stringa | array di blocchi | altro) a testo puro. */
+  /** Normalises a message content (string | block array | other) to plain text. */
   function contentToText(content: unknown): string {
     if (typeof content === 'string') return content;
     if (Array.isArray(content)) {
@@ -430,18 +430,18 @@ export default function (pi: ExtensionAPI) {
   }
 
   function verifyGate(content: unknown): boolean {
-    const match = contentToText(content).match(FORMATO_CARTA_OK);
+    const match = contentToText(content).match(CARD_OK_FORMAT);
     if (!match) return false;
     if (match[1] !== key) return false;
-    if (cfg.ruolo && match[2] !== cfg.ruolo) return false;
+    if (cfg.role && match[2] !== cfg.role) return false;
     if (parseInt(match[3], 10) !== turns) return false;
     return true;
   }
 
-  // ---- iniezione ----
+  // ---- injection ----
 
   function cardBlock(reason: string): string {
-    if (!card || cardOrigin === 'bozza') return '';
+    if (!card || cardOrigin === 'draft') return '';
     const scoped = currentScope().selectCardForTopic(card, latestUserInput, scopeOpts);
     if (!scoped.text) return '';
     const warning = scoped.legacy
@@ -467,37 +467,37 @@ export default function (pi: ExtensionAPI) {
 
     if (!card) {
       ctx.ui.setWidget(WIDGET_KEY, [
-        theme.fg('warning', `\u26a0 CARTA ${label} assente \u2014 bootstrap al prossimo turno`),
+        theme.fg('warning', `\u26a0 ${t('widget.cardAbsent', { label })}`),
       ]);
       return;
     }
 
-    const restanti = cfg.ogniTurni - (periodicTurns % cfg.ogniTurni);
-    const restanteCasuale = randomTarget - turns;
-    const etaTurni = turns - lastUpdateTurn;
-    const etaStr = `${etaTurni}t`;
-    const canali = [
-      cfg.onCompact ? 'compattazione↓ (effimero)' : 'compattazione off',
-      cfg.canalePeriodico ? `ogni ${cfg.ogniTurni}t (tra ${restanti})` : 'periodico off',
-      cfg.canaleRandomReview ? `revisione (tra ${restanteCasuale}t)` : 'revisione off',
-      cfg.canaleSystemPrompt ? 'sysprompt' : 'sysprompt off',
-      `eta: ${etaStr}`,
+    const remaining = cfg.everyTurns - (periodicTurns % cfg.everyTurns);
+    const remainingRandom = randomTarget - turns;
+    const turnAge = turns - lastUpdateTurn;
+    const ageStr = `${turnAge}t`;
+    const channels = [
+      cfg.onCompact ? t('widget.compactDown') : t('widget.compactOff'),
+      cfg.periodicChannel ? t('widget.periodicOn', { turns: cfg.everyTurns, remaining }) : t('widget.periodicOff'),
+      cfg.randomReviewChannel ? t('widget.reviewOn', { remaining: remainingRandom }) : t('widget.reviewOff'),
+      cfg.systemPromptChannel ? t('widget.systemPrompt') : t('widget.systemPromptOff'),
+      t('widget.eta', { age: ageStr }),
     ].join(' \u00b7 ');
 
-    const stato = cfg.attivo ? '' : theme.fg('warning', ' \u00b7 SPENTA');
-    const gateInfo = gateAttivo
-      ? theme.fg('error', ` \u00b7 GATE ${gateAttivo.tentativi}/${GATE_MAX_TENTATIVI} (${gateAttivo.canale})`)
+    const status = cfg.active ? '' : theme.fg('warning', ` \u00b7 ${t('widget.disabled')}`);
+    const gateInfo = activeGate
+      ? theme.fg('error', ` \u00b7 ${t('widget.gate', { attempts: activeGate.attempts, max: GATE_MAX_ATTEMPTS, channel: activeGate.channel })}`)
       : '';
-    const violazioni = gateViolazioni > 0
-      ? theme.fg('error', ` \u00b7 VIOLAZIONI: ${gateViolazioni}`)
+    const violations = gateViolations > 0
+      ? theme.fg('error', ` \u00b7 ${t('widget.violations', { count: gateViolations })}`)
       : '';
     ctx.ui.setWidget(WIDGET_KEY, [
-      theme.fg('accent', `\u26e8 CARTA ${label} `) +
-        theme.fg('dim', `${card.length} char \u00b7 ${cardOrigin} \u00b7 `) +
-        theme.fg('muted', canali) +
-        stato +
+      theme.fg('accent', `\u26e8 ${t('widget.title', { label })} `) +
+        theme.fg('dim', t('widget.cardInfo', { chars: card.length, origin: cardOrigin })) +
+        theme.fg('muted', channels) +
+        status +
         gateInfo +
-        violazioni,
+        violations,
     ]);
   }
 
@@ -506,28 +506,28 @@ export default function (pi: ExtensionAPI) {
     if (ctx && ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
   }
 
-  // ---- bootstrap: l'agente si scrive la carta da fresco ----
+  // ---- bootstrap: the agent writes its card while fresh ----
 
-  /** Sottoinsieme strutturale di BuildSystemPromptOptions: nessun cast necessario. */
-  interface ContestoFresco {
+  /** Structural subset of BuildSystemPromptOptions: no cast needed. */
+  interface FreshContext {
     customPrompt?: string;
     cwd?: string;
     contextFiles?: Array<{ path: string }>;
     selectedTools?: string[];
   }
 
-  function bootstrapMessage(o: ContestoFresco): string {
+  function bootstrapMessage(o: FreshContext): string {
     const files = o.contextFiles ?? [];
-    const elencoFile = files.length
+    const fileList = files.length
       ? files.map((f) => `  - ${f.path}`).join('\n')
       : t('bootstrap.noContextFiles');
-    const strumenti = o.selectedTools ?? [];
-    const bozzaAttiva = cardOrigin === 'bozza' && Boolean(card);
+    const tools = o.selectedTools ?? [];
+    const draftActive = cardOrigin === 'draft' && Boolean(card);
 
 
     const bt = scopeI18n.bootstrap as Record<string, unknown> | undefined;
-    // Una chiave di array sbagliata degraderebbe in silenzio: il prompt perderebbe
-    // righe e nessuno se ne accorgerebbe. Fallo rumore, come t().
+    // A wrong array key would degrade silently: the prompt would lose
+    // lines and nobody would notice. Make it noisy, like t().
     const missing = (key: string) => [`[missing i18n key: ${key} (${lang})]`];
     const rows = (key: string): string[] =>
       Array.isArray(bt?.[key]) ? (bt[key] as string[]) : missing(`bootstrap.${key}`);
@@ -536,14 +536,14 @@ export default function (pi: ExtensionAPI) {
     return [
       typeof bt?.header === 'string' ? bt.header : '[ANTI-AMNESIA]',
       ...interpolateAll(rows('intro'), vars),
-      bozzaAttiva ? t('bootstrap.draftLoaded', { path: cardPath ?? '' }) : '',
+      draftActive ? t('bootstrap.draftLoaded', { path: cardPath ?? '' }) : '',
       '',
       t('bootstrap.detected'),
       t('bootstrap.cwd', { cwd: vars.cwd }),
       t('bootstrap.rolePromptLoaded', { value: o.customPrompt ? t('bootstrap.rolePromptCustom') : t('bootstrap.rolePromptNone') }),
       t('bootstrap.contextFiles'),
-      elencoFile,
-      strumenti.length ? t('bootstrap.activeTools', { tools: strumenti.join(', ') }) : '',
+      fileList,
+      tools.length ? t('bootstrap.activeTools', { tools: tools.join(', ') }) : '',
       '',
       ...interpolateAll(rows('keyNotice'), vars),
       '',
@@ -561,19 +561,19 @@ export default function (pi: ExtensionAPI) {
       .join('\n');
   }
 
-  // ---------------------------------------------------------------- eventi
+  // ---------------------------------------------------------------- events
 
   pi.on('session_start', async (_event, ctx) => {
     ctxRef = ctx;
     const cwd = ctx.cwd ?? process.cwd();
-    // Serve PRIMA dell'i18n: la lingua deve poter venire dalla config di progetto.
+    // Needed BEFORE i18n: the language must be able to come from the project config.
     projectConfigPath = path.join(cwd, PROJECT_SUBDIR, 'config.json');
-    // Ogni runtime/reload usa un URL distinto: niente helper vecchio dalla cache ESM.
+    // Every runtime/reload uses a distinct URL: no stale helper from the ESM cache.
     const helperUrl = new URL('./topic-scope.mjs', import.meta.url);
     const helperSource = readText(fileURLToPath(helperUrl));
     if (helperSource === null) throw new Error(t('error.helperUnreadable'));
-    // Hash del contenuto: stesso codice riusa la cache; una modifica la invalida.
-    // Evita un modulo ESM nuovo a ogni resume lungo senza cambiamenti del file.
+    // Content hash: unchanged code reuses the cache; an edit invalidates it.
+    // Avoids a new ESM module on every long resume with no file change.
     helperUrl.searchParams.set('version', createHash('sha256').update(helperSource).digest('hex').slice(0, 16));
     scope = await import(helperUrl.href) as typeof TopicScope;
     if (typeof scope.replaceActiveCheckpoint !== 'function' || typeof scope.selectCardForTopic !== 'function' ||
@@ -581,8 +581,8 @@ export default function (pi: ExtensionAPI) {
       throw new Error(t('error.helperIncompatible'));
     }
 
-    // i18n: stesso cache-busting dell'helper, cosi' un catalogo modificato e un
-    // /reload lo ricaricano davvero invece di servire la copia in cache ESM.
+    // i18n: same cache-busting as the helper, so an edited catalog and a
+    // /reload really reload it instead of serving the ESM cache copy.
     const i18nUrl = new URL('./i18n.mjs', import.meta.url);
     const i18nSource = readText(fileURLToPath(i18nUrl));
     if (i18nSource === null) throw new Error(t('error.helperUnreadable'));
@@ -591,8 +591,8 @@ export default function (pi: ExtensionAPI) {
     lang = i18n.resolveLanguage(readRawLanguage(GLOBAL_CONFIG, projectConfigPath));
     t = i18n.makeT(lang);
     sectionTitles = i18n.sectionTitles(lang);
-    // SAFETY: loadCatalog restituisce un oggetto JSON arbitrario; lo trattiamo come
-    // record di sezioni e le chiavi mancanti sono tollerate da interpolateAll.
+    // SAFETY: loadCatalog returns an arbitrary JSON object; we treat it as a
+    // section record and missing keys are tolerated by interpolateAll.
     scopeI18n = i18n.loadCatalog(lang) as unknown as Record<string, unknown>;
     interpolateAll = i18n.interpolateAll;
     scopeOpts = {
@@ -603,18 +603,18 @@ export default function (pi: ExtensionAPI) {
     };
 
     const sessionId = ctx.sessionManager.getSessionId();
-    // L'ID Pi è stabile anche se cwd o nome della sessione cambiano.
+    // The Pi ID is stable even if cwd or session name change.
     key = sanitizeKey(sessionId);
 
-    // Carica la config PRIMA di usare cfg.bootstrap / cfg.ogniTurni.
+    // Load the config BEFORE using cfg.bootstrap / cfg.everyTurns.
     loadConfig();
 
     turns = 0;
     latestUserInput = '';
     periodicTurns = 0;
     lastUpdateTurn = 0;
-    gateAttivo = null;
-    gateViolazioni = 0;
+    activeGate = null;
+    gateViolations = 0;
     gateLastViolationTurn = 0;
     pendingManual = false;
     pendingResume = false;
@@ -623,23 +623,23 @@ export default function (pi: ExtensionAPI) {
     pendingPostCompact = false;
     pendingRandomReview = false;
     randomTarget = pickRandomTarget();
-    // Solo /resume riusa la carta della stessa sessione; un fork ha un ID distinto.
-    // La bozza condivisa si carica esclusivamente con /carta bootstrap.
+    // Only /resume reuses the same session card; a fork has a distinct ID.
+    // The shared draft is loaded exclusively with /card bootstrap.
     bootstrapped = false;
     loadCard();
     if (card) {
-      // Una bozza non e' ancora la carta dell'agente: non e' una generazione.
-      if (cardOrigin !== 'bozza') cfg.generazione = Math.max(cfg.generazione, 1);
+      // A draft is not yet the agent's card: it is not a generation.
+      if (cardOrigin !== 'draft') cfg.generation = Math.max(cfg.generation, 1);
       cfg.chars = card.length;
-      // Una sessione ripresa può ricevere solo "continua": ancora la carta al
-      // primissimo LLM, senza attendere cinque/quindici turni del timer.
-      pendingResume = cardOrigin !== 'bozza';
+      // A resumed session may receive only "continue": anchor the card to the
+      // very first LLM, without waiting five/fifteen turns of the timer.
+      pendingResume = cardOrigin !== 'draft';
       if (!persistConfig() && ctx.hasUI) ctx.ui.notify(t('warn.registryNotSaveable'), 'error');
     }
     renderWidget();
-    // Warning se una carta precedente (registro) è molto vecchia: segnala, non ereditare silenziosamente.
+    // Warning if a previous card (registry) is very old: signal, do not inherit silently.
     const reg = globalRegistry()[key];
-    if (card && cardOrigin !== 'bozza' && reg?.updatedAt) {
+    if (card && cardOrigin !== 'draft' && reg?.updatedAt) {
       const ageMs = Date.now() - reg.updatedAt;
       if (ageMs > 24 * 3600 * 1000) {
         const ctx = ctxRef;
@@ -653,11 +653,11 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // Canale c) system prompt + Fase 1 bootstrap
+  // Channel c) system prompt + Phase 1 bootstrap
   pi.on('before_agent_start', async (event) => {
-    if (!cfg.attivo) return;
-    // Fase 1 bootstrap
-    if (!card || cardOrigin === 'bozza') {
+    if (!cfg.active) return;
+    // Phase 1 bootstrap
+    if (!card || cardOrigin === 'draft') {
       if (bootstrapped) return;
       if (!cfg.bootstrap) return;
       bootstrapped = true;
@@ -670,66 +670,66 @@ export default function (pi: ExtensionAPI) {
       };
     }
     latestUserInput = event.prompt;
-    if (!cfg.canaleSystemPrompt) return;
-    const block = cardBlock('carta permanente');
+    if (!cfg.systemPromptChannel) return;
+    const block = cardBlock(t('inject.reasonPermanent'));
     if (!block) return;
     return {
       systemPrompt: `${event.systemPrompt}\n\n${block}`,
     };
   });
 
-  // A fine turno completo, il testo utente non è più una chiave per appunti
-  // archiviati. agent_end è troppo presto (Pi potrebbe fare retry automatici).
+  // At the end of a full turn, the user text is no longer a key for archived
+  // notes. agent_end is too early (Pi may make automatic retries).
   pi.on('agent_settled', async () => { latestUserInput = ''; });
 
-  // ---- Contatori di turni LLM; anche i cicli autonomi senza input utente avanzano ----
+  // ---- LLM turn counters; autonomous cycles with no user input advance too ----
 
   pi.on('turn_end', async () => {
-    if (!cfg.attivo) return;
+    if (!cfg.active) return;
     turns += 1;
-    if (!card || cardOrigin === 'bozza') {
-      // Un bootstrap ignorato viene riproposto: altrimenti il plugin resta spento per sempre.
-      if (turns % cfg.ogniTurni === 0) bootstrapped = false;
+    if (!card || cardOrigin === 'draft') {
+      // An ignored bootstrap is proposed again: otherwise the plugin stays off forever.
+      if (turns % cfg.everyTurns === 0) bootstrapped = false;
       return;
     }
     periodicTurns += 1;
 
-    // Staleness: se la carta non viene aggiornata da 2N turni, forza periodic + random
-    const stalenessLimit = 2 * cfg.ogniTurni;
+    // Staleness: if the card is not updated for 2N turns, force periodic + random
+    const stalenessLimit = 2 * cfg.everyTurns;
     const isStale = (turns - lastUpdateTurn) >= stalenessLimit;
 
-    if (cfg.canalePeriodico && (periodicTurns % cfg.ogniTurni === 0 || isStale)) {
+    if (cfg.periodicChannel && (periodicTurns % cfg.everyTurns === 0 || isStale)) {
       pendingPeriodic = true;
-      const inCooldown = gateLastViolationTurn > 0 && (turns - gateLastViolationTurn) < GATE_COOLDOWN_TURNI;
-      if (cfg.gate && gateAttivo === null && !inCooldown) gateAttivo = { canale: 'periodico', turno: turns, tentativi: 0 };
+      const inCooldown = gateLastViolationTurn > 0 && (turns - gateLastViolationTurn) < GATE_COOLDOWN_TURNS;
+      if (cfg.gate && activeGate === null && !inCooldown) activeGate = { channel: 'periodic', turn: turns, attempts: 0 };
     }
 
-    // Nei lunghi cicli autonomi il checkpoint attivo viene ripetuto più spesso
-    // del refresh completo, senza risvegliare appunti Topic archiviati.
-    const heartbeatEvery = Math.max(1, Math.floor(cfg.ogniTurni / 3));
-    if (cfg.canalePeriodico && !pendingPeriodic && periodicTurns % heartbeatEvery === 0 &&
+    // In long autonomous cycles the active checkpoint is repeated more often
+    // than the full refresh, without waking archived Topic notes.
+    const heartbeatEvery = Math.max(1, Math.floor(cfg.everyTurns / 3));
+    if (cfg.periodicChannel && !pendingPeriodic && periodicTurns % heartbeatEvery === 0 &&
         card && currentScope().selectCardForTopic(card, '', scopeOpts).hasActive) {
       pendingHeartbeat = true;
     }
 
-    // Canale casuale: revisione carta fra N e 2N turni
-    if (turns >= randomTarget && cfg.canaleRandomReview) {
+    // Random channel: card review between N and 2N turns
+    if (turns >= randomTarget && cfg.randomReviewChannel) {
       pendingRandomReview = true;
       randomTarget = turns + pickRandomTarget();
-      const inCooldown = gateLastViolationTurn > 0 && (turns - gateLastViolationTurn) < GATE_COOLDOWN_TURNI;
-      if (cfg.gate && gateAttivo === null && !inCooldown) gateAttivo = { canale: 'revisione', turno: turns, tentativi: 0 };
+      const inCooldown = gateLastViolationTurn > 0 && (turns - gateLastViolationTurn) < GATE_COOLDOWN_TURNS;
+      if (cfg.gate && activeGate === null && !inCooldown) activeGate = { channel: 'review', turn: turns, attempts: 0 };
       const ctx = ctxRef;
       if (ctx && ctx.hasUI) {
         ctx.ui.notify(t('warn.revisionScheduled'), 'warning');
       }
     }
 
-    // Staleness: forza anche la revisione casuale se la carta e' vecchia
-    if (isStale && turns % cfg.ogniTurni === 0 && !pendingRandomReview && cfg.canaleRandomReview) {
+    // Staleness: also force the random review if the card is old
+    if (isStale && turns % cfg.everyTurns === 0 && !pendingRandomReview && cfg.randomReviewChannel) {
       pendingRandomReview = true;
-      const inCooldown = gateLastViolationTurn > 0 && (turns - gateLastViolationTurn) < GATE_COOLDOWN_TURNI;
-      if (cfg.gate && gateAttivo === null && !inCooldown) {
-        gateAttivo = { canale: 'revisione', turno: turns, tentativi: 0 };
+      const inCooldown = gateLastViolationTurn > 0 && (turns - gateLastViolationTurn) < GATE_COOLDOWN_TURNS;
+      if (cfg.gate && activeGate === null && !inCooldown) {
+        activeGate = { channel: 'review', turn: turns, attempts: 0 };
         const ctx = ctxRef;
         if (ctx && ctx.hasUI) {
           ctx.ui.notify(t('warn.staleForcedGate'), 'warning');
@@ -737,28 +737,28 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    // Gate: gestione tentativi e escalation (una tantum per attivazione)
-    if (gateAttivo && gateAttivo.turno < turns) {
-      gateAttivo.tentativi += 1;
-      if (gateAttivo.tentativi >= GATE_MAX_TENTATIVI) {
-        gateViolazioni += 1;
+    // Gate: attempt handling and escalation (once per activation)
+    if (activeGate && activeGate.turn < turns) {
+      activeGate.attempts += 1;
+      if (activeGate.attempts >= GATE_MAX_ATTEMPTS) {
+        gateViolations += 1;
         gateLastViolationTurn = turns;
         const ctx = ctxRef;
         if (ctx && ctx.hasUI) {
-          ctx.ui.notify(t('error.gateFailed', { attempts: GATE_MAX_TENTATIVI, channel: gateAttivo.canale, violations: gateViolazioni }), 'error');
+          ctx.ui.notify(t('error.gateFailed', { attempts: GATE_MAX_ATTEMPTS, channel: activeGate.channel, violations: gateViolations }), 'error');
         }
-        gateAttivo = null;
+        activeGate = null;
       }
     }
 
     renderWidget();
   });
 
-  // Canale a) + b) consegna effimera, garantita a ogni chiamata LLM
+  // Channel a) + b) ephemeral delivery, guaranteed on every LLM call
   pi.on('context', async (event) => {
-    if (!cfg.attivo) return;
-    // Filtra anche se la carta è stata cancellata: i vecchi messaggi persistenti
-    // non devono risuscitare l'incarico precedente durante il nuovo bootstrap.
+    if (!cfg.active) return;
+    // Filter even if the card was deleted: old persistent messages
+    // must not resurrect the previous task during the new bootstrap.
     let lastBootstrap = -1;
     event.messages.forEach((message, index) => {
       if (message.role === 'custom' && message.customType === `${CUSTOM_TYPE}-bootstrap`) lastBootstrap = index;
@@ -767,11 +767,11 @@ export default function (pi: ExtensionAPI) {
       if (message.role !== 'custom') return true;
       if (message.customType === CUSTOM_TYPE) return false;
       if (message.customType !== `${CUSTOM_TYPE}-bootstrap`) return true;
-      // Se è arrivato un nuovo bootstrap da before_agent_start, conservalo.
-      // Scarta i precedenti; quando riproponiamo il bootstrap, scarta tutti.
-      return (!card || cardOrigin === 'bozza') && bootstrapped && index === lastBootstrap;
+      // If a new bootstrap arrived from before_agent_start, keep it.
+      // Discard the earlier ones; when we propose the bootstrap again, discard all.
+      return (!card || cardOrigin === 'draft') && bootstrapped && index === lastBootstrap;
     });
-    if (!card || cardOrigin === 'bozza') {
+    if (!card || cardOrigin === 'draft') {
       if (!cfg.bootstrap || bootstrapped) {
         if (cleanMessages.length !== event.messages.length) return { messages: cleanMessages };
         return;
@@ -785,109 +785,109 @@ export default function (pi: ExtensionAPI) {
         timestamp: Date.now(),
       }] };
     }
-    // Non riusare l'ultimo utente della STORIA: durante resume/cicli autonomi
-    // può risalire a un incarico vecchio. Solo before_agent_start (prompt del
-    // turno attuale) abilita le sezioni Topic archiviate.
-    const blocchi: string[] = [];
-    const motiviCarta: string[] = [];
+    // Do not reuse the LAST user of the HISTORY: during resume/autonomous
+    // cycles it may trace back to an old task. Only before_agent_start (current
+    // turn prompt) enables the archived Topic sections.
+    const blocks: string[] = [];
+    const cardReasons: string[] = [];
 
-    // Gate: verifica conferma utente nel messaggio arrivato
-    if (gateAttivo && cfg.gate) {
+    // Gate: verify the user confirmation in the incoming message
+    if (activeGate && cfg.gate) {
       const lastMsg = event.messages[event.messages.length - 1];
-      // SAFETY: solo i messaggi con `content` possono contenere la conferma
-      // del gate; gli altri (es. bash) non la contengono per definizione.
+      // SAFETY: only messages with `content` can contain the gate
+      // confirmation; the others (e.g. bash) do not contain it by definition.
       const lastContent = lastMsg && 'content' in lastMsg ? lastMsg.content : undefined;
       if (verifyGate(lastContent)) {
-        gateAttivo = null;
+        activeGate = null;
       } else {
         const scoped = currentScope().selectCardForTopic(card, latestUserInput, scopeOpts);
         if (!scoped.text) {
-          gateAttivo = null;
-        } else blocchi.push(
-          `[ANTI-AMNESIA \u00b7 GATE ${gateAttivo.tentativi}/${GATE_MAX_TENTATIVI}] ` +
-            `Conferma obbligatoria: rispondi SOLO con il formato esatto:\n` +
-            `[CARTA OK] chiave=${key} ruolo=${cfg.ruolo ?? 'N/D'} turno=${gateAttivo.turno}\n` +
-            `Memoria pertinente (${scoped.text.length} char):\n${scoped.text || '(nessun contenuto applicabile al topic corrente)'}`,
+          activeGate = null;
+        } else blocks.push(
+          `[ANTI-AMNESIA \u00b7 ${t('gate.header', { attempts: activeGate.attempts, max: GATE_MAX_ATTEMPTS })}] ` +
+            `${t('gate.confirm')}\n` +
+            `${t('gate.format', { key, role: cfg.role ?? t('gate.noRole'), turn: activeGate.turn })}\n` +
+            `${t('gate.relevantMemory', { chars: scoped.text.length })}\n${scoped.text || t('gate.noContent')}`,
         );
       }
     }
     if (pendingResume) {
-      if (!cfg.canaleSystemPrompt) motiviCarta.push(t('inject.reasonResume'));
+      if (!cfg.systemPromptChannel) cardReasons.push(t('inject.reasonResume'));
       pendingResume = false;
       pendingHeartbeat = false;
       pendingPeriodic = false;
     }
     if (pendingManual) {
-      motiviCarta.push(t('inject.reasonManual'));
+      cardReasons.push(t('inject.reasonManual'));
       pendingManual = false;
     }
     if (pendingPostCompact) {
-      if (cfg.onCompact) motiviCarta.push(t('inject.reasonPostCompact'));
+      if (cfg.onCompact) cardReasons.push(t('inject.reasonPostCompact'));
       pendingPostCompact = false;
       pendingHeartbeat = false;
     }
     if (pendingPeriodic) {
-      if (cfg.canalePeriodico) motiviCarta.push(t('inject.reasonPeriodic', { turns }));
+      if (cfg.periodicChannel) cardReasons.push(t('inject.reasonPeriodic', { turns }));
       pendingPeriodic = false;
       pendingHeartbeat = false;
     }
-    if (pendingHeartbeat && cfg.canalePeriodico && motiviCarta.length === 0 &&
-        blocchi.every((item) => !item.startsWith('[ANTI-AMNESIA · GATE'))) {
+    if (pendingHeartbeat && cfg.periodicChannel && cardReasons.length === 0 &&
+        blocks.every((item) => !item.startsWith('[ANTI-AMNESIA · GATE'))) {
       const active = currentScope().selectCardForTopic(card, '', scopeOpts);
       if (active.hasActive) {
-        blocchi.push(`${t('inject.heartbeatHeader')}\n${active.text}\n` +
+        blocks.push(`${t('inject.heartbeatHeader')}\n${active.text}\n` +
           t('inject.heartbeatFooter'));
       }
       pendingHeartbeat = false;
     }
     if (pendingRandomReview) {
-      if (cfg.canaleRandomReview) {
-        if (motiviCarta.length === 0) motiviCarta.push(t('inject.reasonScheduled'));
-        // SAFETY: il catalogo e' JSON non tipizzato; se 'inject' manca restano
-        // solo le righe gia' presenti. Una chiave assente resta rumore.
+      if (cfg.randomReviewChannel) {
+        if (cardReasons.length === 0) cardReasons.push(t('inject.reasonScheduled'));
+        // SAFETY: the catalog is untyped JSON; if 'inject' is missing only
+        // the lines already present remain. A missing key stays noise.
         const injectRows = (scopeI18n.inject as { randomReview?: unknown } | undefined)?.randomReview;
-        blocchi.push(Array.isArray(injectRows)
+        blocks.push(Array.isArray(injectRows)
           ? interpolateAll(injectRows as string[], sectionTitles).join(' ')
           : `[missing i18n key: inject.randomReview (${lang})]`);
       }
       pendingRandomReview = false;
     }
-    // Una sola copia della carta per chiamata LLM, anche se compattazione,
-    // periodico e revisione scadono contemporaneamente.
-    if (motiviCarta.length > 0) {
+    // One copy of the card per LLM call, even if compaction,
+    // periodic and review all fall due together.
+    if (cardReasons.length > 0) {
       pendingHeartbeat = false;
-      if (blocchi.every((item) => !item.startsWith('[ANTI-AMNESIA · GATE'))) {
-        const block = injectEphemeral(motiviCarta.join('; '));
-        if (block) blocchi.unshift(block);
+      if (blocks.every((item) => !item.startsWith('[ANTI-AMNESIA · GATE'))) {
+        const block = injectEphemeral(cardReasons.join('; '));
+        if (block) blocks.unshift(block);
       }
     }
-    if (!cfg.canalePeriodico) pendingHeartbeat = false;
-    if (blocchi.length === 0) {
+    if (!cfg.periodicChannel) pendingHeartbeat = false;
+    if (blocks.length === 0) {
       if (cleanMessages.length !== event.messages.length) return { messages: cleanMessages };
       return;
     }
-    // SAFETY: CustomMessage e' registrato in CustomAgentMessages, quindi
-    // l'oggetto letterale qui sotto e' gia' un AgentMessage valido: nessun cast.
-    const promemoria = {
+    // SAFETY: CustomMessage is registered in CustomAgentMessages, so the
+    // literal object below is already a valid AgentMessage: no cast.
+    const reminder = {
       role: 'custom' as const,
       customType: CUSTOM_TYPE,
-      content: blocchi.join('\n\n'),
+      content: blocks.join('\n\n'),
       display: false,
       timestamp: Date.now(),
     };
-    return { messages: [...cleanMessages, promemoria] }; 
+    return { messages: [...cleanMessages, reminder] }; 
   });
 
 
   pi.on('session_compact', async (event, ctx) => {
-    if (!card || cardOrigin === 'bozza' || !cfg.attivo || !cfg.onCompact) return;
-    // nextTurn aspetta il prossimo input dell'utente: insufficiente durante un retry
-    // automatico dopo compaction. Il prossimo hook context consegna subito il checkpoint.
+    if (!card || cardOrigin === 'draft' || !cfg.active || !cfg.onCompact) return;
+    // nextTurn waits for the next user input: insufficient during an automatic
+    // retry after compaction. The next context hook delivers the checkpoint at once.
     pendingPostCompact = true;
     if (cfg.gate) {
-      const inCooldown = gateLastViolationTurn > 0 && (turns - gateLastViolationTurn) < GATE_COOLDOWN_TURNI;
+      const inCooldown = gateLastViolationTurn > 0 && (turns - gateLastViolationTurn) < GATE_COOLDOWN_TURNS;
       if (!inCooldown) {
-        gateAttivo = { canale: 'compattazione', turno: turns, tentativi: 0 };
+        activeGate = { channel: 'compaction', turn: turns, attempts: 0 };
         if (ctx.hasUI) {
           ctx.ui.notify(t('warn.reinjectedGate', { reason: event.reason }), 'warning');
         }
@@ -905,7 +905,7 @@ export default function (pi: ExtensionAPI) {
   // ---------------------------------------------------------------- tool
 
   pi.registerTool({
-    name: 'carta_memoria',
+    name: 'memory_card',
     label: t('tool.label'),
     description:
       t('tool.description'),
@@ -914,64 +914,64 @@ export default function (pi: ExtensionAPI) {
       t('tool.guideline'),
     ],
     parameters: Type.Object({
-      testo: Type.Optional(
+      text: Type.Optional(
         Type.String({
           description:
-            t('param.testo'),
+            t('param.text'),
         }),
       ),
-      lavoro_attivo: Type.Optional(Type.String({
-        description: t('param.lavoro_attivo', { active: sectionTitles.active }),
+      activeWork: Type.Optional(Type.String({
+        description: t('param.activeWork', { active: sectionTitles.active }),
       })),
-      ogni_turni: Type.Optional(Type.Number({ description: t('param.ogni_turni') })),
-      ruolo: Type.Optional(Type.String({ description: t('param.ruolo') })),
-      chiave: Type.Optional(Type.String({ description: t('param.chiave') })),
-      canale_session_compact: Type.Optional(Type.Boolean({ description: t('param.canale_session_compact') })),
-      canale_system_prompt: Type.Optional(Type.Boolean({ description: t('param.canale_system_prompt') })),
-      canale_periodico: Type.Optional(Type.Boolean({ description: t('param.canale_periodico') })),
-      canale_random_review: Type.Optional(Type.Boolean({ description: t('param.canale_random_review') })),
+      everyTurns: Type.Optional(Type.Number({ description: t('param.everyTurns') })),
+      role: Type.Optional(Type.String({ description: t('param.role') })),
+      key: Type.Optional(Type.String({ description: t('param.key') })),
+      sessionCompactChannel: Type.Optional(Type.Boolean({ description: t('param.sessionCompactChannel') })),
+      systemPromptChannel: Type.Optional(Type.Boolean({ description: t('param.systemPromptChannel') })),
+      periodicChannel: Type.Optional(Type.Boolean({ description: t('param.periodicChannel') })),
+      randomReviewChannel: Type.Optional(Type.Boolean({ description: t('param.randomReviewChannel') })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       ctxRef = ctx;
 
-      if (params.chiave && sanitizeKey(params.chiave) !== key) {
+      if (params.key && sanitizeKey(params.key) !== key) {
         return {
           content: [{ type: 'text', text: t('error.sessionIsolated') }],
-          details: { ok: false, error: 'chiave-sessione-diversa' },
+          details: { ok: false, error: 'session-key-mismatch' },
         };
       }
 
-      if (params.ogni_turni !== undefined &&
-          (!Number.isFinite(params.ogni_turni) || params.ogni_turni < 1 || params.ogni_turni > MAX_INTERVAL_TURNS)) {
+      if (params.everyTurns !== undefined &&
+          (!Number.isFinite(params.everyTurns) || params.everyTurns < 1 || params.everyTurns > MAX_INTERVAL_TURNS)) {
         return {
           content: [{ type: 'text', text: t('error.intervalRange', { max: MAX_INTERVAL_TURNS }) }],
-          details: { ok: false, error: 'intervallo-non-valido' },
+          details: { ok: false, error: 'invalid-interval' },
         };
       }
-      if (params.testo !== undefined && params.lavoro_attivo !== undefined) {
+      if (params.text !== undefined && params.activeWork !== undefined) {
         return {
           content: [{ type: 'text', text: t('error.textOrActive') }],
-          details: { ok: false, error: 'parametri-incompatibili' },
+          details: { ok: false, error: 'incompatible-params' },
         };
       }
-      let testo = (params.testo ?? '').trim();
-      if (params.lavoro_attivo !== undefined) {
-        if (!card || !params.lavoro_attivo.trim()) {
+      let text = (params.text ?? '').trim();
+      if (params.activeWork !== undefined) {
+        if (!card || !params.activeWork.trim()) {
           return {
             content: [{ type: 'text', text: t('error.needCardAndCheckpoint') }],
-            details: { ok: false, error: 'checkpoint-assente' },
+            details: { ok: false, error: 'checkpoint-missing' },
           };
         }
         try {
-          testo = currentScope().replaceActiveCheckpoint(card, params.lavoro_attivo, scopeOpts);
+          text = currentScope().replaceActiveCheckpoint(card, params.activeWork, scopeOpts);
         } catch (err) {
           return {
             content: [{ type: 'text', text: (err as Error).message }],
-            details: { ok: false, error: 'checkpoint-ambiguo' },
+            details: { ok: false, error: 'checkpoint-ambiguous' },
           };
         }
       }
-      if (!testo) {
+      if (!text) {
         return {
           content: [
             {
@@ -981,55 +981,55 @@ export default function (pi: ExtensionAPI) {
                 : t('info.noCardForKey', { key }),
             },
           ],
-          details: { ok: true, azione: 'lettura', chiave: key, chars: card?.length ?? 0 },
+          details: { ok: true, action: 'read', key, chars: card?.length ?? 0 },
         };
       }
 
-      if (testo.length > MAX_CARD_CHARS) {
+      if (text.length > MAX_CARD_CHARS) {
         return {
-          content: [{ type: 'text', text: t('error.cardTooLong', { len: testo.length, max: MAX_CARD_CHARS }) }],
-          details: { ok: false, error: 'carta-troppo-lunga' },
+          content: [{ type: 'text', text: t('error.cardTooLong', { len: text.length, max: MAX_CARD_CHARS }) }],
+          details: { ok: false, error: 'card-too-long' },
         };
       }
 
-      // La chiave identifica la sessione: aggiornare il file esistente evita copie stale.
+      // The key identifies the session: updating the existing file avoids stale copies.
       const target = globalCardPath();
 
       try {
         if (fs.existsSync(target)) writeText(`${target}.bak`, readText(target) ?? '');
-        // Non pubblicare una carta incompleta in memoria né su disco.
-        writeText(`${target}.tmp`, testo);
+        // Do not publish an incomplete card to memory nor to disk.
+        writeText(`${target}.tmp`, text);
         fs.renameSync(`${target}.tmp`, target);
       } catch (err) {
         try { fs.unlinkSync(`${target}.tmp`); } catch { /* noop */ }
         return {
           content: [{ type: 'text', text: t('error.cardUnchanged', { err: (err as Error).message }) }],
-          details: { ok: false, error: 'scrittura-fallita' },
+          details: { ok: false, error: 'write-failed' },
         };
       }
-      card = testo;
+      card = text;
       cardPath = target;
-      cardOrigin = 'memoria';
-      cfg.generazione += 1;
+      cardOrigin = 'memory';
+      cfg.generation += 1;
       lastUpdateTurn = turns;
-      if (params.ogni_turni !== undefined) setIntervalTurns(params.ogni_turni);
-      if (params.ruolo) cfg.ruolo = params.ruolo;
-      if (typeof params.canale_session_compact === 'boolean') cfg.onCompact = params.canale_session_compact;
-      if (typeof params.canale_system_prompt === 'boolean') cfg.canaleSystemPrompt = params.canale_system_prompt;
-      if (typeof params.canale_periodico === 'boolean') cfg.canalePeriodico = params.canale_periodico;
-      if (typeof params.canale_random_review === 'boolean') cfg.canaleRandomReview = params.canale_random_review;
+      if (params.everyTurns !== undefined) setIntervalTurns(params.everyTurns);
+      if (params.role) cfg.role = params.role;
+      if (typeof params.sessionCompactChannel === 'boolean') cfg.onCompact = params.sessionCompactChannel;
+      if (typeof params.systemPromptChannel === 'boolean') cfg.systemPromptChannel = params.systemPromptChannel;
+      if (typeof params.periodicChannel === 'boolean') cfg.periodicChannel = params.periodicChannel;
+      if (typeof params.randomReviewChannel === 'boolean') cfg.randomReviewChannel = params.randomReviewChannel;
       cfg.cwd = ctx.cwd ?? process.cwd();
-      cfg.attivo = true;
+      cfg.active = true;
       cfg.chars = card.length;
       const registrySaved = persistConfig(true);
       bootstrapped = true;
       renderWidget();
 
-      const canali = [];
-      if (cfg.onCompact) canali.push('compattazione (effimero)');
-      if (cfg.canalePeriodico) canali.push(`periodico ogni ${cfg.ogniTurni} turni (effimero)`);
-      if (cfg.canaleSystemPrompt) canali.push('system prompt');
-      if (cfg.canaleRandomReview) canali.push('random review');
+      const channels = [];
+      if (cfg.onCompact) channels.push(t('info.channelCompact'));
+      if (cfg.periodicChannel) channels.push(t('info.channelPeriodic', { turns: cfg.everyTurns }));
+      if (cfg.systemPromptChannel) channels.push(t('info.channelSystemPrompt'));
+      if (cfg.randomReviewChannel) channels.push(t('info.channelRandomReview'));
       return {
         content: [
           {
@@ -1037,65 +1037,65 @@ export default function (pi: ExtensionAPI) {
             text:
               t('info.cardSavedFull', {
                 saved: registrySaved ? t('info.cardSaved') : t('info.cardSavedRegistryFail'),
-                chars: card.length, key, generation: cfg.generazione,
+                chars: card.length, key, generation: cfg.generation,
               }) +
-              (canali.length ? `${t('info.reinjectionActive', { channels: canali.join(' + ') })}\n` : '') +
+              (channels.length ? `${t('info.reinjectionActive', { channels: channels.join(' + ') })}\n` : '') +
               t('info.cardFile', { target }),
           },
         ],
-        details: { ok: registrySaved, azione: 'scrittura', chiave: key, chars: card.length, generazione: cfg.generazione, ...(registrySaved ? {} : { error: 'registro-fallito', cartaSalvata: true }) },
+        details: { ok: registrySaved, action: 'write', key, chars: card.length, generation: cfg.generation, ...(registrySaved ? {} : { error: 'registry-failed', cardSaved: true }) },
       };
     },
   });
 
-  // ---------------------------------------------------------------- comandi
+  // ---------------------------------------------------------------- commands
 
   function invalidateActiveCard(): void {
     card = null;
     cardPath = null;
-    cardOrigin = 'globale';
+    cardOrigin = 'global';
     cfg.bootstrap = true;
     bootstrapped = false;
     pendingPeriodic = pendingManual = pendingResume = pendingHeartbeat = pendingPostCompact = pendingRandomReview = false;
-    gateAttivo = null;
+    activeGate = null;
     renderWidget();
   }
 
-  function stato(): string {
+  function status(): string {
     if (!card) return t('warn.cardAbsent', { key });
-    const restanti = cfg.ogniTurni - (turns % cfg.ogniTurni);
+    const remaining = cfg.everyTurns - (turns % cfg.everyTurns);
     return [
-      cfg.attivo ? t('status.on', { key }) : t('status.off', { key }),
-      t('status.cardLine', { chars: card.length, origin: cardOrigin, draft: cardOrigin === 'bozza' ? t('status.draftNote') : '', generation: cfg.generazione }),
+      cfg.active ? t('status.on', { key }) : t('status.off', { key }),
+      t('status.cardLine', { chars: card.length, origin: cardOrigin, draft: cardOrigin === 'draft' ? t('status.draftNote') : '', generation: cfg.generation }),
       cardPath ? `  ${cardPath}` : t('status.notOnDisk'),
-      `  session_compact: ${cfg.onCompact ? 'effimero' : 'off'}`,
-      `  system_prompt: ${cfg.canaleSystemPrompt ? 'on' : 'off'}`,
-      `  periodico: ${cfg.canalePeriodico ? `effimero ogni ${cfg.ogniTurni} turni (tra ${restanti})` : 'off'}`,
-      `  random_review: ${cfg.canaleRandomReview ? 'on' : 'off'}`,
-      `  gate: ${cfg.gate ? 'on' : 'off'}${gateViolazioni > 0 ? ` (violazioni: ${gateViolazioni})` : ''}`,
-      `  turni trascorsi: ${turns}`,
+      t('status.sessionCompact', { state: cfg.onCompact ? t('status.ephemeral') : t('status.channelOff') }),
+      t('status.systemPrompt', { state: cfg.systemPromptChannel ? t('status.channelOn') : t('status.channelOff') }),
+      t('status.periodic', { state: cfg.periodicChannel ? t('status.periodicOn', { turns: cfg.everyTurns, remaining }) : t('status.channelOff') }),
+      t('status.randomReview', { state: cfg.randomReviewChannel ? t('status.channelOn') : t('status.channelOff') }),
+      t('status.gate', { state: cfg.gate ? t('status.channelOn') : t('status.channelOff') }) + (gateViolations > 0 ? t('status.gateViolations', { count: gateViolations }) : ''),
+      t('status.turns', { turns }),
     ].join('\n');
   }
 
-  pi.registerCommand('carta', {
+  pi.registerCommand('card', {
     description: t('command.description'),
     handler: async (args, ctx) => {
       ctxRef = ctx;
-      const parti = (args ?? '').trim().split(/\s+/).filter(Boolean);
-      const azione = (parti[0] ?? '').toLowerCase();
+      const parts = (args ?? '').trim().split(/\s+/).filter(Boolean);
+      const action = (parts[0] ?? '').toLowerCase();
 
-      switch (azione) {
+      switch (action) {
         case '':
-        case 'stato':
-          ctx.ui.notify(stato(), 'info');
+        case 'status':
+          ctx.ui.notify(status(), 'info');
           return;
 
-        case 'rigenera': {
+        case 'regenerate': {
           const target = globalCardPath();
           try {
             if (fs.existsSync(target)) {
               writeText(`${target}.bak`, readText(target) ?? '');
-              fs.unlinkSync(target); // al resume non deve tornare la carta superata
+              fs.unlinkSync(target); // on resume the superseded card must not come back
             }
           } catch (err) {
             ctx.ui.notify(t('error.regenerateCancelled', { err: (err as Error).message }), 'error');
@@ -1114,8 +1114,8 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        case 'ogni': {
-          const n = Number(parti[1]);
+        case 'every': {
+          const n = Number(parts[1]);
           if (!Number.isFinite(n) || n < 1 || n > MAX_INTERVAL_TURNS) {
             ctx.ui.notify(t('error.usageEveryN', { max: MAX_INTERVAL_TURNS }), 'warning');
             return;
@@ -1124,55 +1124,55 @@ export default function (pi: ExtensionAPI) {
           const saved = persistConfig();
           renderWidget();
           if (!saved) ctx.ui.notify(t('info.intervalNotSaveable'), 'error');
-          ctx.ui.notify(t('info.intervalSet', { turns: cfg.ogniTurni }), 'info');
+          ctx.ui.notify(t('info.intervalSet', { turns: cfg.everyTurns }), 'info');
           return;
         }
 
         case 'on':
         case 'off': {
-          // /carta on|off -> interruttore generale
-          cfg.attivo = azione === 'on';
+          // /card on|off -> master switch
+          cfg.active = action === 'on';
           const saved = persistConfig();
           renderWidget();
           if (!saved) ctx.ui.notify(t('info.toggleNotSaveable'), 'error');
-          ctx.ui.notify(cfg.attivo ? t('info.enabled', { key }) : t('info.disabled', { key }), 'info');
+          ctx.ui.notify(cfg.active ? t('info.enabled', { key }) : t('info.disabled', { key }), 'info');
           return;
         }
 
         case 'session_compact':
         case 'system_prompt':
-        case 'periodico':
-        case 'random_review':
+        case 'periodic':
+        case 'randomReview':
         case 'gate': {
-          // /carta <canale> [on|off] -> attiva/disattiva il singolo canale.
-          // Senza argomento mostra lo stato del canale.
-          const campo = CANALE_CAMPI[azione];
-          const sub = (parti[1] ?? '').toLowerCase();
+          // /card <channel> [on|off] -> toggle the single channel.
+          // With no argument it shows the channel state.
+          const field = CHANNEL_FIELDS[action];
+          const sub = (parts[1] ?? '').toLowerCase();
           if (sub === 'on' || sub === 'off') {
-            cfg[campo] = sub === 'on';
-            if (azione === 'random_review' && sub === 'on') {
+            cfg[field] = sub === 'on';
+            if (action === 'randomReview' && sub === 'on') {
               pendingRandomReview = false;
               randomTarget = turns + pickRandomTarget();
             }
             const saved = persistConfig();
             renderWidget();
             if (!saved) ctx.ui.notify(t('info.channelNotSaveable'), 'error');
-            ctx.ui.notify(t('info.channelOnOff', { channel: azione, state: sub === 'on' ? 'ON' : 'OFF', key }), 'info');
+            ctx.ui.notify(t('info.channelOnOff', { channel: action, state: sub === 'on' ? 'ON' : 'OFF', key }), 'info');
             return;
           }
-          if (azione === 'gate' && gateAttivo) {
+          if (action === 'gate' && activeGate) {
             ctx.ui.notify(
-              `GATE ATTIVO: canale=${gateAttivo.canale} turno=${gateAttivo.turno} tentativi=${gateAttivo.tentativi}/${GATE_MAX_TENTATIVI}` +
-                (gateViolazioni > 0 ? `\nViolazioni: ${gateViolazioni}` : ''),
+              t('gate.activeStatus', { channel: activeGate.channel, turn: activeGate.turn, attempts: activeGate.attempts, max: GATE_MAX_ATTEMPTS }) +
+                (gateViolations > 0 ? `\n${t('gate.violationsLine', { count: gateViolations })}` : ''),
               'error',
             );
             return;
           }
-          ctx.ui.notify(t('info.channelState', { channel: azione, state: cfg[campo] ? 'ON' : 'OFF', key }), 'info');
+          ctx.ui.notify(t('info.channelState', { channel: action, state: cfg[field] ? 'ON' : 'OFF', key }), 'info');
           return;
         }
 
-        case 'ora': {
+        case 'now': {
           if (!card) {
             ctx.ui.notify(t('warn.nothingToInject'), 'warning');
             return;
@@ -1182,7 +1182,7 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        case 'progetto': {
+        case 'project': {
           if (!card) {
             ctx.ui.notify(t('warn.nothingToCopy'), 'warning');
             return;
@@ -1211,7 +1211,7 @@ export default function (pi: ExtensionAPI) {
           cfg.bootstrap = true;
           bootstrapped = false;
           pendingPeriodic = pendingManual = pendingResume = pendingHeartbeat = pendingPostCompact = pendingRandomReview = false;
-          loadCard(true); // bozza esplicita, mai reiniettata come carta personale
+          loadCard(true); // explicit draft, never re-injected as a personal card
           const saved = persistConfig();
           renderWidget();
           if (!saved) ctx.ui.notify(t('warn.registryNotSaveable'), 'error');
@@ -1227,17 +1227,17 @@ export default function (pi: ExtensionAPI) {
             return;
           }
           const lines = entries.map(([k, c]) => {
-            const eta = c.updatedAt ? new Date(c.updatedAt).toLocaleString(lang === 'it' ? 'it-IT' : 'en-US') : 'mai';
-            return `  ${k} — gen ${c.generazione}, ${c.chars} char, aggiornata ${eta}`;
+            const date = c.updatedAt ? new Date(c.updatedAt).toLocaleString(lang === 'it' ? 'it-IT' : 'en-US') : t('info.neverUpdated');
+            return t('info.registryLine', { key: k, generation: c.generation, chars: c.chars, date });
           });
           ctx.ui.notify(t('info.cardsInRegistry', { count: entries.length, list: lines.join('\n') }), 'info');
           return;
         }
 
         case 'delete': {
-          const targetKey = parti[1] ?? key;
-          // Il comando legge anche chiavi storiche: mai usarle direttamente in path.join
-          // senza impedire traversal (../, slash, path assoluti).
+          const targetKey = parts[1] ?? key;
+          // The command also reads historical keys: never use them directly in path.join
+          // without preventing traversal (../, slash, absolute paths).
           if (!/^[a-z0-9][a-z0-9._-]{0,59}$/.test(targetKey)) {
             ctx.ui.notify(t('error.invalidKey'), 'error');
             return;
@@ -1270,7 +1270,7 @@ export default function (pi: ExtensionAPI) {
         }
 
         case 'purge': {
-          const hours = parti[1] === undefined ? 48 : Number(parti[1]);
+          const hours = parts[1] === undefined ? 48 : Number(parts[1]);
           if (!Number.isFinite(hours) || hours <= 0) {
             ctx.ui.notify(t('error.usagePurge'), 'warning');
             return;
@@ -1285,14 +1285,14 @@ export default function (pi: ExtensionAPI) {
             matched = toDelete.length;
             if (matched === 0) return true;
             for (const [k] of toDelete) {
-              // Il registro può essere stato modificato a mano: nessuna chiave
-              // non valida può diventare un percorso da cancellare.
+              // The registry may have been edited by hand: no invalid
+              // key may become a path to delete.
               if (!/^[a-z0-9][a-z0-9._-]{0,59}$/.test(k)) continue;
               const cardFile = path.join(CARDS_DIR, `${k}.md`);
               try {
                 if (fs.existsSync(cardFile)) fs.unlinkSync(cardFile);
               } catch {
-                continue; // non dichiarare eliminata una carta ancora su disco
+                continue; // do not declare a card deleted while still on disk
               }
               delete cards[k];
               if (k === key) activeRemoved = true;

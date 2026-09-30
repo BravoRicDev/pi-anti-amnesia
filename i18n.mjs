@@ -1,16 +1,16 @@
 /**
- * i18n — lingua, cataloghi e pattern delle sezioni.
+ * i18n — language, catalogs and section patterns.
  *
- * Lingua: risolta UNA volta all'avvio e congelata per tutta la sessione.
- * L'LLM non deve mai vedere il contesto cambiare lingua a meta' conversazione:
- * e' la causa principale di output ibrido it/en nelle carte.
+ * Language: resolved ONCE at startup and frozen for the whole session.
+ * The LLM must never see the context change language mid-conversation:
+ * that is the main cause of hybrid it/en output in cards.
  *
- * Priorita' di risoluzione:
- *   1. PI_ANTI_AMNESIA_LANG   (env, override esplicito — utile per test)
- *   2. config.language        (se valorizzata e diversa da "auto")
- *   3. LC_ALL > LC_MESSAGES > LANG   (es. it_IT.UTF-8 -> italiano)
+ * Resolution priority:
+ *   1. PI_ANTI_AMNESIA_LANG   (env, explicit override — useful for tests)
+ *   2. config.language        (if set and different from "auto")
+ *   3. LC_ALL > LC_MESSAGES > LANG   (e.g. it_IT.UTF-8 -> Italian)
  *   4. Intl.DateTimeFormat().resolvedOptions().locale
- *   5. fallback: inglese
+ *   5. fallback: English
  */
 
 import * as fs from 'node:fs';
@@ -20,25 +20,25 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const I18N_DIR = path.join(HERE, 'i18n');
 
-/** Lingue supportate. L'inglese e' il fallback e il default. */
+/** Supported languages. English is the fallback and the default. */
 export const SUPPORTED = ['en', 'it'];
 export const FALLBACK = 'en';
 
 const cache = new Map();
 
-/** Una lingua e' supportata solo se ha un catalogo su disco. */
+/** A language is supported only if it has a catalog on disk. */
 export function isSupported(lang) {
   return SUPPORTED.includes(lang) && fs.existsSync(path.join(I18N_DIR, `${lang}.json`));
 }
 
-/** Estrae il codice lingua da un tag di locale tipo "it_IT.UTF-8" -> "it". */
+/** Extracts the language code from a locale tag like "it_IT.UTF-8" -> "it". */
 function primaryOf(tag) {
   if (typeof tag !== 'string') return null;
   const m = /^\s*([A-Za-z]{2,3})(?:-|_)/.exec(tag) ?? /^\s*([A-Za-z]{2,3})\s*$/.exec(tag);
   return m ? m[1].toLowerCase() : null;
 }
 
-/** Legge l'ambiente senza buttare via i valori. */
+/** Reads the environment without discarding the values. */
 function fromEnvironment(env) {
   for (const name of ['PI_ANTI_AMNESIA_LANG', 'LC_ALL', 'LC_MESSAGES', 'LANG', 'LANGUAGE']) {
     const tag = env?.[name];
@@ -49,7 +49,7 @@ function fromEnvironment(env) {
   return null;
 }
 
-/** Locale del runtime, come ultimo resort prima del fallback. */
+/** Runtime locale, as a last resort before the fallback. */
 function fromIntl() {
   try {
     return primaryOf(Intl.DateTimeFormat().resolvedOptions().locale);
@@ -59,8 +59,8 @@ function fromIntl() {
 }
 
 /**
- * Risolve la lingua attiva. Chiamare UNA volta e congelare il risultato.
- * @param {string|undefined|null} configured  valore di config.language
+ * Resolves the active language. Call ONCE and freeze the result.
+ * @param {string|undefined|null} configured  config.language value
  * @param {Record<string,string|undefined>} [env]
  */
 export function resolveLanguage(configured, env = process.env) {
@@ -73,7 +73,7 @@ export function resolveLanguage(configured, env = process.env) {
   return fromEnvironment(env) ?? (isSupported(fromIntl() ?? '') ? fromIntl() : FALLBACK);
 }
 
-/** Carica un catalogo, con fallback a cascata sull'inglese. */
+/** Loads a catalog, with cascading fallback to English. */
 export function loadCatalog(lang) {
   if (cache.has(lang)) return cache.get(lang);
   const read = (l) => {
@@ -83,15 +83,15 @@ export function loadCatalog(lang) {
       return null;
     }
   };
-  // Ultimo resort: un oggetto vuoto. Non far fallire l'avvio della sessione per
-  // un catalogo mancante — t() emetterà [missing i18n key: ...] su ogni chiave,
-  // quindi il guasto resta rumorosamente visibile invece di beinge silently lost.
+  // Last resort: an empty object. Do not fail session startup for
+  // a missing catalog — t() will emit [missing i18n key: ...] on every key,
+  // so the fault stays loudly visible instead of being silently lost.
   const catalog = read(lang) ?? read(FALLBACK) ?? {};
   cache.set(lang, catalog);
   return catalog;
 }
 
-/** Interpola {name} con i valori forniti. */
+/** Interpolates {name} with the provided values. */
 function interpolate(template, vars) {
   if (!vars) return template;
   return template.replace(/\{(\w+)\}/g, (match, name) =>
@@ -100,31 +100,31 @@ function interpolate(template, vars) {
 }
 
 /**
- * Costruisce il traduttore per una lingua.
+ * Builds the translator for a language.
  * t('error.cardTooLong', { len, max })
- * Le chiavi mancanti rivelano il path completo invece di fallire in silenzio.
+ * Missing keys reveal the full path instead of failing silently.
  */
 export function makeT(lang) {
   const catalog = loadCatalog(lang);
   return function t(key, vars) {
     const template = key.split('.').reduce((node, part) => (node == null ? undefined : node[part]), catalog);
     if (typeof template !== 'string') {
-      // Non degradare in silenzio: un errore di chiave deve essere evidente.
+      // Do not degrade silently: a key error must be evident.
       return `[missing i18n key: ${key} (${lang})]`;
     }
     return interpolate(template, vars);
   };
 }
 
-/** Espande {name} dentro un array di stringhe (righe di prompt). */
+/** Expands {name} inside an array of strings (prompt lines). */
 export function interpolateAll(lines, vars) {
   return lines.map((line) => interpolate(line, vars));
 }
 
 /**
- * Alias delle intestazioni di sezione, da usare come pattern nel parser.
- * Contiene SEMPRE gli alias di entrambe le lingue, cosi' una carta resta
- * modificabile anche dopo un cambio di lingua della configurazione.
+ * Section heading aliases, to be used as parser patterns.
+ * It ALWAYS contains the aliases of both languages, so a card stays
+ * editable even after a configuration language change.
  */
 export function sectionAliases(lang) {
   const catalog = loadCatalog(lang);
@@ -136,7 +136,7 @@ export function sectionAliases(lang) {
   };
 }
 
-/** Titoli canonici delle sezioni, per la lingua attiva. */
+/** Canonical section titles, for the active language. */
 export function sectionTitles(lang) {
   const catalog = loadCatalog(lang);
   return {

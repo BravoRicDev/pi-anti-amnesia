@@ -64,7 +64,7 @@ test('checkpoint update preserves rules and archived notes verbatim', () => {
   assert.doesNotMatch(updated, /test invoice/);
   assert.match(updated, /Ruolo developer/);
   assert.match(updated, /Storico CRM/);
-  assert.throws(() => replaceActiveCheckpoint('## Sempre valido\nsolo ruolo', 'nuovo'), /esattamente una sezione/);
+  assert.throws(() => replaceActiveCheckpoint('## Sempre valido\nsolo ruolo', 'nuovo'), /exactly one/i);
 });
 
 test('latest user text ignores assistant and tool messages', () => {

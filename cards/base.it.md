@@ -1,7 +1,7 @@
 # Carta memoria — modello da personalizzare
 
 Questo modello NON contiene fatti sulla sessione corrente. Sostituisci i segnaposto
-solo con informazioni verificate, poi salva con `carta_memoria({ testo: "...", ruolo: "..." })`.
+solo con informazioni verificate, poi salva con `memory_card({ text: "...", role: "..." })`.
 Non copiare regole di altri ruoli o piani di vecchi progetti.
 
 ## Sempre valido
