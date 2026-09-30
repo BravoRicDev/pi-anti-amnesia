@@ -46,7 +46,15 @@ class AntiAmnesiaGuardrails(unittest.TestCase):
         self.assertNotIn("TOPIC RILEVATO", SOURCE)
 
     def test_config_boolean_values_are_validated(self):
-        self.assertIn("typeof cfg[field] !== 'boolean'", SOURCE)
+        # The invariant is that a non-boolean value must never decide a channel.
+        # The old guardrail asserted the line
+        #   if (typeof cfg[field] !== 'boolean') cfg[field] = DEFAULTS[field];
+        # which satisfied the letter but not the spirit: the string "false" (the
+        # real case of a hand-edited config.json) is not a boolean, so it fell
+        # back to the DEFAULT, which for periodicChannel/randomReviewChannel/
+        # onCompact is true - and an explicit "off" became "on".
+        self.assertIn("parseBooleanish", SOURCE)
+        self.assertIn("cfg[field] = parsed ?? DEFAULTS[field]", SOURCE)
 
     def test_old_persistent_messages_are_filtered(self):
         self.assertIn("const cleanMessages = event.messages.filter", SOURCE)

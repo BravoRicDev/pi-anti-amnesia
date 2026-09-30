@@ -179,13 +179,31 @@ test('a busy registry lock fails explicitly without replacing another writer', a
   try {
     const lockPath = path.join(h.temp, '.pi/anti-amnesia/registry.json.lock');
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-    fs.writeFileSync(lockPath, '999999\n');
+    // The lock must belong to a LIVE process: a dead pid is an orphan stall, and
+    // since the stale-lock fix it gets broken instead of blocking persistence
+    // forever. This process's own pid is alive by construction.
+    const live = `${process.pid}\n`;
+    fs.writeFileSync(lockPath, live);
     const blocked = await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
     assert.equal(blocked.details.error, 'registry-failed');
-    assert.equal(fs.readFileSync(lockPath, 'utf8'), '999999\n');
+    assert.equal(fs.readFileSync(lockPath, 'utf8'), live);
     fs.unlinkSync(lockPath);
     const retried = await h.tools.get('memory_card').execute('retry', { text: card }, undefined, undefined, h.ctx);
     assert.equal(retried.details.ok, true);
+  } finally { cleanup(h); }
+});
+
+test('a stale lock from a dead process is broken instead of blocking forever', async () => {
+  const h = await harness();
+  try {
+    const lockPath = path.join(h.temp, '.pi/anti-amnesia/registry.json.lock');
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    // Non-existent pid: the old behaviour left the lock there forever,
+    // disabling registry persistence with no recovery.
+    fs.writeFileSync(lockPath, '999999\n');
+    const wrote = await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
+    assert.equal(wrote.details.ok, true, 'an orphan stall must not prevent writing');
+    assert.equal(fs.existsSync(lockPath), false, 'the stale lock must be removed');
   } finally { cleanup(h); }
 });
 

@@ -61,13 +61,22 @@ const WIDGET_KEY = 'pi-anti-amnesia';
 const MAX_CARD_CHARS = 20000;
 const MAX_INTERVAL_TURNS = 1000;
 const GATE_MAX_ATTEMPTS = 3;
-const CARD_OK_FORMAT = /\[CARD OK\] key=(\S+) role=(\S+) turn=(\d+)/;
+// `role` may contain spaces (most roles do: "Hardware & LLM Serving Technician
+// cubotto"), so it cannot be captured with (\S+): the capture stopped at the
+// first token and the comparison against cfg.role always failed, making the gate
+// unpassable for most of the roles in the live registry. (.+?) is non-greedy so
+// the trailing `turn=` still terminates the role.
+const CARD_OK_FORMAT = /\[CARD OK\] key=(\S+) role=(.+?) turn=(\d+)/;
 
 // __dirname equivalent in ESM: directory of this source file (the extension).
 const _EXT_DIR = path.dirname(fileURLToPath(import.meta.url));
 // Shared global config (synced via PiAgent, co-located with the extension).
-// Precedence: DEFAULTS ← global ← registry[key] ← project.
+// Precedence: DEFAULTS <- global <- user <- registry[key] <- project.
 const GLOBAL_CONFIG = path.join(_EXT_DIR, 'config.json');
+// Pi's conventional path (~/.pi/<name>/config.json), the one pi-cwl and pi-arc
+// follow. It used to be ignored silently: a user writing their settings there
+// saw no effect and no warning.
+const USER_CONFIG = path.join(GLOBAL_ROOT, 'config.json');
 
 // Shared seed, used only on an explicit bootstrap request.
 // Priority: env -> config.baseCard -> card bundled for the active language -> legacy.
@@ -136,6 +145,21 @@ const DEFAULTS: CardConfig = {
   // Empty = use cards/base.<lang>.md bundled with the extension.
   baseCard: '',
 };
+
+/**
+ * Parses the boolean spellings a hand-edited JSON config may contain.
+ * Returns null when the value is not a recognised boolean, so the caller can
+ * decide the fallback (the default for that field).
+ */
+function parseBooleanish(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value !== 'string') return null;
+  const s = value.trim().toLowerCase();
+  if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true;
+  if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
+  return null;
+}
 
 /**
  * Raw language, read BEFORE the full merge and without depending on `key`.
@@ -230,6 +254,80 @@ function writeRegistry(cards: Record<string, CardConfig>): boolean {
   }
 }
 
+/**
+ * A lock whose owning process is gone can never be released, and the holder is
+ * recorded as a pid on the first line: use it to break a stale lock instead of
+ * leaving registry persistence disabled for good.
+ * Returns true when the lock was removed.
+ */
+function breakStaleLock(lockPath: string): boolean {
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf-8').trim().split('\n')[0] ?? '';
+    const pid = Number.parseInt(raw, 10);
+    if (!Number.isFinite(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0); // signal 0: existence check only
+      return false; // still alive: the lock is legitimate
+    } catch (err) {
+      // ESRCH = no such process. EPERM means it exists but belongs to someone
+      // else, so we must not touch it.
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') return false;
+    }
+    fs.unlinkSync(lockPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The `.bak` files are free-rolling backups that are never pruned. Every time
+ * the card is rewritten it leaves another one, and a write/delete cycle
+ * (resume, bootstrap) produces two in a row, for an unaccounted pile-up of old
+ * contents. The whole backup cycle is reduced to a single file: the last one,
+ * the one that was meant to be kept.
+ * Called at session_start so the pile stops growing with every session that
+ * rewrites the card, and never grows again on its own.
+ */
+function pruneBackups(): void {
+  try {
+    const dir = CARDS_DIR;
+    if (!fs.existsSync(dir)) return;
+    // Two separate piles, and the second is the bigger one in practice:
+    //   1) several .bak of the SAME card - keep the newest, drop the rest.
+    //   2) a .bak whose card was already deleted (purge, resume, rename) - the
+    //      backup outlived the thing it was backing up, so it is pure garbage.
+    // Both are unbounded: every write adds to (1), every purge adds to (2).
+    const newest = new Map<string, string>(); // base path -> newest bak path
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.bak')) continue;
+      const base = path.join(dir, entry.name.slice(0, -'.bak'.length));
+      const existing = newest.get(base);
+      if (!existing || fs.statSync(path.join(dir, entry.name)).mtimeMs > fs.statSync(existing).mtimeMs) {
+        newest.set(base, entry.name);
+      }
+    }
+    for (const [base, keep] of newest) {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith('.bak')) continue;
+        if (entry.name === keep) continue;
+        const base2 = path.join(dir, entry.name.slice(0, -'.bak'.length));
+        if (base2 !== base) continue;
+        try { fs.unlinkSync(path.join(dir, entry.name)); } catch { /* noop */ }
+      }
+    }
+    // (2): a .bak whose card no longer exists is garbage - delete it outright.
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.bak')) continue;
+      const base = path.join(dir, entry.name.slice(0, -'.bak'.length));
+      if (fs.existsSync(base)) continue;
+      try { fs.unlinkSync(path.join(dir, entry.name)); } catch { /* noop */ }
+    }
+  } catch {
+    /* noop: pruning is best-effort and must never break session start */
+  }
+}
+
 /** Cross-process lock over the WHOLE read-modify-write, not just the rename. */
 function withRegistryLock(update: () => boolean): boolean {
   ensureDirs();
@@ -248,6 +346,9 @@ function withRegistryLock(update: () => boolean): boolean {
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return false;
+      // Before waiting: if the holder is dead, clear the lock. Otherwise a crash
+      // mid-write would block every later attempt forever, with no recovery.
+      if (breakStaleLock(lockPath)) continue;
       Atomics.wait(pause, 0, 0, 20); // max wait ~800 ms, then an explicit error
     }
   }
@@ -315,12 +416,23 @@ export default function (pi: ExtensionAPI) {
 
   // ---- loading ----
 
+  /**
+   * Caps a card on READ as well as on write.
+   * MAX_CARD_CHARS was enforced only when the tool wrote a card, so a card
+   * already on disk (edited by hand, or written by an older version) was
+   * injected whole on every turn, however large it was.
+   */
+  function clampCard(text: string): string {
+    if (text.length <= MAX_CARD_CHARS) return text;
+    return `${text.slice(0, MAX_CARD_CHARS)}\n\n${t('error.cardTooLong', { len: text.length, max: MAX_CARD_CHARS })}`;
+  }
+
   function loadCard(draftOnly = false): void {
     if (!draftOnly) {
       // Project cards are not loaded: they may belong to another role/chat.
       const fromGlobal = readText(globalCardPath());
       if (fromGlobal && fromGlobal.trim()) {
-        card = fromGlobal;
+        card = clampCard(fromGlobal);
         cardPath = globalCardPath();
         cardOrigin = 'global';
         return;
@@ -332,7 +444,7 @@ export default function (pi: ExtensionAPI) {
       for (const cand of draftCandidates(cfg.baseCard, lang)) {
         const draft = readText(cand);
         if (draft && draft.trim()) {
-          card = draft;
+          card = clampCard(draft);
           cardPath = cand;
           cardOrigin = 'draft';
           return;
@@ -346,13 +458,15 @@ export default function (pi: ExtensionAPI) {
 
   function loadConfig(): void {
     cfg = { ...DEFAULTS };
-    // 1) Shared global config (synced via PiAgent, co-located with the extension).
-    const fromGlobal = readText(GLOBAL_CONFIG);
-    if (fromGlobal) {
+    // 1) Shared global config (synced via PiAgent, co-located with the extension),
+    // then Pi's conventional user config path.
+    for (const source of [GLOBAL_CONFIG, USER_CONFIG]) {
+      const raw = readText(source);
+      if (!raw) continue;
       try {
-        const parsed = JSON.parse(fromGlobal);
+        const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') cfg = { ...cfg, ...parsed };
-      } catch { /* invalid global config: ignored */ }
+      } catch { /* invalid config: ignored */ }
     }
     // 2) Session registry (overrides the global one).
     const stored = globalRegistry()[key];
@@ -368,7 +482,16 @@ export default function (pi: ExtensionAPI) {
     if (!Number.isFinite(cfg.everyTurns) || cfg.everyTurns < 1 || cfg.everyTurns > MAX_INTERVAL_TURNS) cfg.everyTurns = DEFAULTS.everyTurns;
     cfg.everyTurns = Math.floor(cfg.everyTurns);
     for (const field of ['bootstrap', 'systemPromptChannel', 'periodicChannel', 'randomReviewChannel', 'onCompact', 'gate', 'active'] as const) {
-      if (typeof cfg[field] !== 'boolean') cfg[field] = DEFAULTS[field];
+      // A hand-edited config.json can hold the STRING "false". Falling back to
+      // the default for anything non-boolean turned an explicit "off" into
+      // "on" for every channel whose default is true (periodicChannel,
+      // randomReviewChannel, onCompact, bootstrap, active) - the user's intent
+      // silently inverted. Recognised strings are parsed; only values that are
+      // neither a boolean nor a known boolean string fall back to the default.
+      const raw = cfg[field] as unknown;
+      if (typeof raw === 'boolean') continue;
+      const parsed = parseBooleanish(raw);
+      cfg[field] = parsed ?? DEFAULTS[field];
     }
     if (cfg.periodic !== 'ephemeral' && cfg.periodic !== 'persistent') cfg.periodic = DEFAULTS.periodic;
     if (cfg.compaction !== 'ephemeral' && cfg.compaction !== 'persistent') cfg.compaction = DEFAULTS.compaction;
@@ -433,8 +556,12 @@ export default function (pi: ExtensionAPI) {
     const match = contentToText(content).match(CARD_OK_FORMAT);
     if (!match) return false;
     if (match[1] !== key) return false;
-    if (cfg.role && match[2] !== cfg.role) return false;
-    if (parseInt(match[3], 10) !== turns) return false;
+    if (cfg.role && match[2].trim() !== cfg.role) return false;
+    // Compare against the turn the model was ASKED to echo (activeGate.turn),
+    // not the live counter: `turns` advances on every turn_end, so any turn
+    // boundary between arming and answering rejected a correct confirmation.
+    const expected = activeGate ? activeGate.turn : turns;
+    if (parseInt(match[3], 10) !== expected) return false;
     return true;
   }
 
@@ -448,7 +575,12 @@ export default function (pi: ExtensionAPI) {
       ? t('scope.legacyHint')
       : t('scope.checkpointHint');
     const unclassified = scoped.unclassified.length
-      ? t('scope.unclassifiedHint', { list: scoped.unclassified.slice(0, 3).join(', ') })
+      ? t('scope.unclassifiedHint', {
+          list: scoped.unclassified.slice(0, 3).join(', '),
+          always: sectionTitles.always,
+          active: sectionTitles.active,
+          topic: sectionTitles.topic,
+        })
       : '';
     return `[ANTI-AMNESIA \u00b7 ${reason}]\n${scoped.text}${warning}${unclassified}`;
   }
@@ -588,7 +720,7 @@ export default function (pi: ExtensionAPI) {
     if (i18nSource === null) throw new Error(t('error.helperUnreadable'));
     i18nUrl.searchParams.set('version', createHash('sha256').update(i18nSource).digest('hex').slice(0, 16));
     const i18n = await import(i18nUrl.href) as typeof I18n;
-    lang = i18n.resolveLanguage(readRawLanguage(GLOBAL_CONFIG, projectConfigPath));
+    lang = i18n.resolveLanguage(readRawLanguage(GLOBAL_CONFIG, USER_CONFIG, projectConfigPath));
     t = i18n.makeT(lang);
     sectionTitles = i18n.sectionTitles(lang);
     // SAFETY: loadCatalog returns an arbitrary JSON object; we treat it as a
@@ -608,6 +740,10 @@ export default function (pi: ExtensionAPI) {
 
     // Load the config BEFORE using cfg.bootstrap / cfg.everyTurns.
     loadConfig();
+
+    // The .bak files are free-rolling backups that are never pruned: reduce the
+    // pile to the last one that was meant to be kept, once per session start.
+    pruneBackups();
 
     turns = 0;
     latestUserInput = '';
