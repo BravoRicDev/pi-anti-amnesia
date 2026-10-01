@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { extractLatestUserText, replaceActiveCheckpoint, selectCardForTopic } from '../topic-scope.mjs';
+import { extractLatestUserText, replaceActiveCheckpoint, replaceBlock, checkTodo, selectCardForTopic } from '../topic-scope.mjs';
 
 const card = [
   '## Sempre valido',
@@ -75,4 +75,108 @@ test('latest user text ignores assistant and tool messages', () => {
     { role: 'user', content: [{ type: 'text', text: 'Nuova richiesta' }] },
   ];
   assert.equal(extractLatestUserText(messages), 'Nuova richiesta');
+});
+
+// ---------------------------------------------------------------------------
+// Block writes: one section at a time, and one checkbox at a time.
+// ---------------------------------------------------------------------------
+
+test('a block write replaces only its own section', () => {
+  const withBlocks = [
+    '## Sempre valido',
+    'Ruolo developer.',
+    '## Obiettivo',
+    'Vecchio obiettivo.',
+    '## Piano',
+    'passo uno, passo due',
+    '## Lavoro attivo',
+    'Task corrente.',
+  ].join('\n');
+  const updated = replaceBlock(withBlocks, 'plan', '- passo A\n- passo B');
+  assert.match(updated, /## Piano\n- passo A\n- passo B/);
+  assert.doesNotMatch(updated, /passo uno/);
+  // Everything the caller did NOT mention is still there, verbatim: that is the
+  // whole point of writing in blocks instead of rewriting the card.
+  assert.match(updated, /## Obiettivo\nVecchio obiettivo\./);
+  assert.match(updated, /## Lavoro attivo\nTask corrente\./);
+  assert.match(updated, /## Sempre valido\nRuolo developer\./);
+});
+
+test('a block that does not exist yet is appended at the end', () => {
+  const updated = replaceBlock(card, 'objective', 'Portare a termine il cantiere.');
+  assert.match(updated, /## Obiettivo\nPortare a termine il cantiere\./);
+  assert.match(updated, /Ruolo developer/);
+  assert.ok(
+    updated.indexOf('## Obiettivo') > updated.indexOf('## Topic:'),
+    'the new block must land at the end, not inside another section',
+  );
+});
+
+test('two identical headings are refused instead of guessing which one to rewrite', () => {
+  assert.throws(() => replaceBlock('## Piano\nprimo\n## Piano\nsecondo', 'plan', 'nuovo'), /more than one/i);
+});
+
+test('an unknown block name is refused', () => {
+  assert.throws(() => replaceBlock(card, 'topic', 'x'), /unknown block/i);
+  assert.throws(() => replaceBlock(card, 'inventato', 'x'), /unknown block/i);
+});
+
+test('ticking a todo item touches the checkbox and nothing else', () => {
+  const withTodo = `${card}\n## Todo\n- [ ] scrivere i test\n- [x] leggere il codice`;
+  const ticked = checkTodo(withTodo, 1, true);
+  assert.match(ticked, /- \[x\] scrivere i test/);
+  assert.match(ticked, /- \[x\] leggere il codice/);
+  assert.match(ticked, /Ruolo developer/);
+  assert.match(ticked, /Storico CRM/);
+});
+
+test('a todo item can be addressed by its text, and unticked again', () => {
+  const withTodo = `${card}\n## Todo\n- [ ] scrivere i test\n- [ ] aggiornare la carta`;
+  const byText = checkTodo(withTodo, 'aggiornare', true);
+  assert.match(byText, /- \[x\] aggiornare la carta/);
+  assert.match(byText, /- \[ \] scrivere i test/);
+  const back = checkTodo(byText, 'aggiornare', false);
+  assert.match(back, /- \[ \] aggiornare la carta/);
+});
+
+test('an ambiguous todo address is refused rather than guessed', () => {
+  const withTodo = `${card}\n## Todo\n- [ ] scrivere i test\n- [ ] scrivere la doc`;
+  assert.throws(() => checkTodo(withTodo, 'scrivere', true), /matches 2/i);
+  assert.throws(() => checkTodo(withTodo, 9, true), /does not exist/i);
+});
+
+test('a todo block with no checkboxes, or none at all, is refused', () => {
+  assert.throws(() => checkTodo(card, 1, true), /exactly one todo/i);
+  assert.throws(() => checkTodo(`${card}\n## Todo\nsolo prosa`, 1, true), /no checkbox/i);
+});
+
+test('the objective, the plan and the todo list are delivered without keywords', () => {
+  const full = [
+    '## Sempre valido', 'Ruolo dev.',
+    '## Obiettivo', 'OBIETTIVO-MARCA',
+    '## Piano', 'PIANO-MARCA',
+    '## Todo', '- [ ] TODO-MARCA',
+    '## Topic: crm', 'STORICO-MARCA',
+  ].join('\n');
+  // A prompt with nothing to do with any of it: the three blocks are permanent, the
+  // archived topic is not. Losing the plan to a keyword rule would lose the material
+  // that must not be lost.
+  const result = selectCardForTopic(full, 'Scrivi una poesia per mia sorella');
+  assert.match(result.text, /OBIETTIVO-MARCA/);
+  assert.match(result.text, /PIANO-MARCA/);
+  assert.match(result.text, /TODO-MARCA/);
+  assert.doesNotMatch(result.text, /STORICO-MARCA/);
+});
+
+test('a todo item has three states, and a boolean still means done / not done', () => {
+  const withTodo = `${card}\n## Todo\n- [ ] scrivere i test\n- [x] leggere il codice`;
+  const working = checkTodo(withTodo, 1, 'in_progress');
+  assert.match(working, /- \[~\] scrivere i test/, 'in_progress must be visible at a glance');
+  assert.match(working, /- \[x\] leggere il codice/, 'the other items must not move');
+  // A BOOLEAN KEEPS ITS OLD MEANING, so nothing that used to work stops working: this is the
+  // difference between extending an API and breaking it.
+  assert.match(checkTodo(working, 1, true), /- \[x\] scrivere i test/);
+  assert.match(checkTodo(working, 1, false), /- \[ \] scrivere i test/);
+  // And an in-progress item can be addressed by its text and finished.
+  assert.match(checkTodo(working, 'scrivere', 'completed'), /- \[x\] scrivere i test/);
 });

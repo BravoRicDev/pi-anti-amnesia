@@ -7,6 +7,9 @@
   "section": {
     "always": "Always valid",
     "active": "Active work",
+    "objective": "Objective",
+    "plan": "Plan",
+    "todo": "Todo",
     "topicPrefix": "Topic",
     "_aliases": {
       "_note": "Parser patterns for section headings. Both Italian and English aliases are always accepted, so a card stays editable after you switch language.",
@@ -21,6 +24,22 @@
         "Active work",
         "Active",
         "Active Work"
+      ],
+      "objective": [
+        "Obiettivo",
+        "Objective",
+        "Goal"
+      ],
+      "plan": [
+        "Piano",
+        "Plan"
+      ],
+      "todo": [
+        "Todo",
+        "Todolist",
+        "To-do",
+        "Attivita",
+        "Tasks"
       ],
       "topic": [
         "topic",
@@ -37,6 +56,9 @@
     "helperUnreadable": "Anti-amnesia: topic-scope.mjs helper is not readable.",
     "helperIncompatible": "Anti-amnesia: incompatible topic-scope helper; restart Pi.",
     "exactlyOneActive": "Exactly one '## {active}' section is required: migrate the card before updating the checkpoint.",
+    "blockOrTodo": "Use 'block' or 'todoItem', not both: one write does one thing.",
+    "unknownBlock": "Unknown block '{block}'. Allowed: {allowed}.",
+    "blockNeedsValue": "Block '{block}' requires 'value': the new body of the section.",
     "sessionIsolated": "The card is isolated per session: reading or writing a key other than the active one is not allowed.",
     "intervalRange": "everyTurns must be between 1 and {max}: card left unchanged.",
     "textOrActive": "Pass either text or activeWork, not both.",
@@ -113,10 +135,18 @@
     "sessionCompactChannel": "session_compact channel (after compaction). Default ON.",
     "systemPromptChannel": "system prompt channel (every turn). Default OFF.",
     "periodicChannel": "Periodic channel (every N turns). Default ON.",
-    "randomReviewChannel": "Random review channel (random cycle). Default ON."
+    "randomReviewChannel": "Random review channel (random cycle). Default ON.",
+    "block": "Write ONE block only: 'always', 'active', 'objective', 'plan' or 'todo'. The other sections stay untouched. Requires 'value'.",
+    "value": "The new body of the block named by 'block'. It replaces that section; if it does not exist yet, it is created at the end.",
+    "todoItem": "Tick (or untick) ONE item of the 'todo' block: a 1-based index, or the item's text. An ambiguous address is refused.",
+    "todoDone": "true (default) ticks the item, false unticks it.",
+    "todoStatus": "Item state: 'pending', 'in_progress' or 'completed'. It takes precedence over todoDone. It is what lets a glance answer 'which task am I on'."
   },
   "command": {
-    "description": "Anti-amnesia card: /card | /card regenerate | /card every N | /card on|off | /card <channel> on|off | /card now | /card project"
+    "description": "Anti-amnesia card: /card | /card blocks | /card regenerate | /card every N | /card on|off | /card <channel> on|off | /card now | /card project",
+    "blocksHeader": "Card: {total} characters in {count} sections.",
+    "blockLine": "  {title} — {chars} characters",
+    "blocksNone": "Card with no '## ' sections: {chars} characters of unstructured text."
   },
   "scope": {
     "unclassifiedHint": "[Unclassified ## sections excluded: {list}. Migrate them to '{always}', '{active}' or '{topic}: ...']",
@@ -178,6 +208,9 @@
       "     Write \"none\" if the work is done. Update it at every phase change with",
       "     memory_card({ activeWork: \"objective; verified state; next step; blockers\" })."
     ],
+    "sectionObjective": "  ## {objective} — the goal of THIS session, in one sentence. It does not change every turn.",
+    "sectionPlan": "  ## {plan} — the ordered steps, first to last. Mark progress as you go.",
+    "sectionTodo": "  ## {todo} — the operational checklist, one item per line as '- [ ] text'. Tick it with memory_card instead of rewriting the card.",
     "sectionTopic": "  ## {topic}: word1, word2 — ARCHIVED/inactive notes, only for explicit requests.",
     "topicWarning": "  Do not hide the active work under {topic}: it does not depend on the last prompt's words.",
     "handoff": [

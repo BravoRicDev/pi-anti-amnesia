@@ -16,6 +16,9 @@ export interface UserMessage {
 export interface SectionAliases {
   always: string[];
   active: string[];
+  objective: string[];
+  plan: string[];
+  todo: string[];
   topic: string[];
 }
 
@@ -41,6 +44,27 @@ export function selectCardForTopic(
 export function replaceActiveCheckpoint(
   card: string,
   checkpoint: string,
+  opts?: ScopeOptions,
+): string;
+/**
+ * Replaces the body of ONE section and leaves every other section untouched; appends the
+ * section when it does not exist yet. Throws when the alias matches more than once, because
+ * rewriting the wrong one of two identical headings is silent corruption.
+ */
+export function replaceBlock(
+  card: string,
+  kind: string,
+  value: string,
+  opts?: ScopeOptions,
+): string;
+/**
+ * Ticks or unticks ONE item of the todo block, by 1-based index or by its text. Throws on an
+ * ambiguous address rather than guessing, and on a todo section that is missing or duplicated.
+ */
+export function checkTodo(
+  card: string,
+  target: number | string,
+  done: boolean | string,
   opts?: ScopeOptions,
 ): string;
 export function extractLatestUserText(messages: UserMessage[]): string;

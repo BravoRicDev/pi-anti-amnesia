@@ -388,7 +388,34 @@ export default function (pi: ExtensionAPI) {
   let t: (key: string, vars?: Record<string, string | number>) => string = (key) => `[${key}]`;
   let scopeOpts: Record<string, unknown> = {};
   // Canonical section titles and raw catalog, for the composed prompts.
-  let sectionTitles = { always: 'Always valid', active: 'Active work', topic: 'Topic' };
+  // A DIAGNOSTIC LOG, because this extension had NONE. The operator reported that the
+  // post-compaction injection "non sta funzionando" and there was no way to tell whether the
+  // event fired, whether the handler returned early, or whether the block was built and then
+  // lost. Every branch below leaves a row. Append-only and capped; a write failure is swallowed,
+  // because logging must never break the extension it observes.
+  const CARD_LOG_PATH = path.join(GLOBAL_ROOT, 'card.log');
+  function cardLog(row: string): void {
+    try {
+      fs.mkdirSync(GLOBAL_ROOT, { recursive: true });
+      fs.appendFileSync(CARD_LOG_PATH, `${new Date().toISOString()} ${row}\n`, 'utf-8');
+      if (fs.statSync(CARD_LOG_PATH).size > 512 * 1024) {
+        fs.writeFileSync(CARD_LOG_PATH, (readText(CARD_LOG_PATH) ?? '').split('\n').slice(-800).join('\n'), 'utf-8');
+      }
+    } catch { /* logging must never break the extension */ }
+  }
+
+  // THE POST-COMPACTION WINDOW — OFF BY DEFAULT, and that is deliberate. A native compaction
+  // replaces a large part of the conversation with a summary, so the argument for keeping the
+  // card in flight for a few turns is real: one ephemeral injection means the next turn has
+  // neither the card nor the history that carried it. But the existing suite encodes the
+  // ONE-SHOT behaviour as intended (tests/extension-flow.test.mjs:285 asserts that the call
+  // right after the retry returns nothing), and I could not verify the failure mode on the
+  // live path. Turning this on is a BEHAVIOUR CHANGE and must be justified by the log above,
+  // not by a hypothesis. Set to 3 to enable the window.
+  const POST_COMPACT_TURNS = 0;
+  let postCompactUntil = -1;
+
+  let sectionTitles = { always: 'Always valid', active: 'Active work', objective: 'Objective', plan: 'Plan', todo: 'Todo', topic: 'Topic' };
   let scopeI18n: Record<string, unknown> = {};
   let interpolateAll: (lines: string[], vars: Record<string, string | number>) => string[] =
     (lines) => lines;
@@ -663,7 +690,7 @@ export default function (pi: ExtensionAPI) {
     const missing = (key: string) => [`[missing i18n key: ${key} (${lang})]`];
     const rows = (key: string): string[] =>
       Array.isArray(bt?.[key]) ? (bt[key] as string[]) : missing(`bootstrap.${key}`);
-    const vars = { cwd: o.cwd ?? ctxRef?.cwd ?? '?', path: cardPath ?? '', active: sectionTitles.active, topic: sectionTitles.topic, always: sectionTitles.always };
+    const vars = { cwd: o.cwd ?? ctxRef?.cwd ?? '?', path: cardPath ?? '', active: sectionTitles.active, topic: sectionTitles.topic, always: sectionTitles.always, objective: sectionTitles.objective, plan: sectionTitles.plan, todo: sectionTitles.todo };
 
     return [
       typeof bt?.header === 'string' ? bt.header : '[ANTI-AMNESIA]',
@@ -683,6 +710,12 @@ export default function (pi: ExtensionAPI) {
       t('bootstrap.sectionAlways', { always: sectionTitles.always }),
       t('bootstrap.sectionActive', { active: sectionTitles.active }),
       ...interpolateAll(rows('sectionActiveNote'), vars),
+      // The three blocks are ANNOUNCED here, and that is not decoration: an agent that is not
+      // told they exist will keep rewriting the whole card with `text`, which is the operation
+      // these blocks exist to replace. A tool nobody knows about is a tool nobody uses.
+      t('bootstrap.sectionObjective', { objective: sectionTitles.objective }),
+      t('bootstrap.sectionPlan', { plan: sectionTitles.plan }),
+      t('bootstrap.sectionTodo', { todo: sectionTitles.todo }),
       t('bootstrap.sectionTopic', { topic: sectionTitles.topic }),
       t('bootstrap.topicWarning', { topic: sectionTitles.topic }),
       ...interpolateAll(rows('handoff'), vars),
@@ -892,7 +925,10 @@ export default function (pi: ExtensionAPI) {
 
   // Channel a) + b) ephemeral delivery, guaranteed on every LLM call
   pi.on('context', async (event) => {
-    if (!cfg.active) return;
+    if (!cfg.active) {
+      cardLog(`CONTEXT turn ${turns}: skipped, the extension is switched off`);
+      return;
+    }
     // Filter even if the card was deleted: old persistent messages
     // must not resurrect the previous task during the new bootstrap.
     let lastBootstrap = -1;
@@ -909,6 +945,12 @@ export default function (pi: ExtensionAPI) {
     });
     if (!card || cardOrigin === 'draft') {
       if (!cfg.bootstrap || bootstrapped) {
+        // THIS RETURN IS THE ONE THAT COULD HIDE THE COMPACTION FAILURE. If the card is gone or
+        // is still a draft and the bootstrap was already proposed, the hook leaves WITHOUT
+        // injecting and WITHOUT saying anything — so a session that lost its card looked
+        // identical, from the outside, to a session that simply had nothing to inject. It is
+        // logged now: the whole point of the log is that no branch can be silent.
+        cardLog(`CONTEXT turn ${turns}: no card (${!card ? 'absent' : 'draft'}), bootstrap already proposed - nothing injected`);
         if (cleanMessages.length !== event.messages.length) return { messages: cleanMessages };
         return;
       }
@@ -961,6 +1003,13 @@ export default function (pi: ExtensionAPI) {
       if (cfg.onCompact) cardReasons.push(t('inject.reasonPostCompact'));
       pendingPostCompact = false;
       pendingHeartbeat = false;
+      cardLog(`CONTEXT turn ${turns}: post-compaction injection, window until ${postCompactUntil}`);
+    }
+    // THE WINDOW. A compaction is still in effect after the first injection, so the card keeps
+    // being delivered until the window closes. Without this the very next turn would have
+    // neither the card nor the history that the compaction removed.
+    if (postCompactUntil > turns && cfg.onCompact && cardReasons.length === 0) {
+      cardReasons.push(t('inject.reasonPostCompact'));
     }
     if (pendingPeriodic) {
       if (cfg.periodicChannel) cardReasons.push(t('inject.reasonPeriodic', { turns }));
@@ -999,9 +1048,11 @@ export default function (pi: ExtensionAPI) {
     }
     if (!cfg.periodicChannel) pendingHeartbeat = false;
     if (blocks.length === 0) {
+      cardLog(`CONTEXT turn ${turns}: nothing to inject (pending consumed, no window, no review)`);
       if (cleanMessages.length !== event.messages.length) return { messages: cleanMessages };
       return;
     }
+    cardLog(`CONTEXT turn ${turns}: injected ${blocks.length} block(s), ${blocks.join('|').length} chars, reasons=${cardReasons.join(';') || 'none'}`);
     // SAFETY: CustomMessage is registered in CustomAgentMessages, so the
     // literal object below is already a valid AgentMessage: no cast.
     const reminder = {
@@ -1016,10 +1067,18 @@ export default function (pi: ExtensionAPI) {
 
 
   pi.on('session_compact', async (event, ctx) => {
-    if (!card || cardOrigin === 'draft' || !cfg.active || !cfg.onCompact) return;
+    if (!card || cardOrigin === 'draft' || !cfg.active || !cfg.onCompact) {
+      cardLog(`COMPACT skipped (reason=${event.reason}): ${!card ? 'no-card' : cardOrigin === 'draft' ? 'draft' : !cfg.active ? 'inactive' : 'channel-off'}`);
+      return;
+    }
     // nextTurn waits for the next user input: insufficient during an automatic
     // retry after compaction. The next context hook delivers the checkpoint at once.
     pendingPostCompact = true;
+    // STRICTLY greater: with the window off (`POST_COMPACT_TURNS = 0`) this is `turns`, and
+    // `turns > turns` is false — which is the whole point. Written as `>=` it fired on the same
+    // turn and made the window impossible to switch off.
+    postCompactUntil = POST_COMPACT_TURNS > 0 ? turns + POST_COMPACT_TURNS : -1;
+    cardLog(`COMPACT fired (reason=${event.reason}): card ${card.length} chars, window until turn ${postCompactUntil}`);
     if (cfg.gate) {
       const inCooldown = gateLastViolationTurn > 0 && (turns - gateLastViolationTurn) < GATE_COOLDOWN_TURNS;
       if (!inCooldown) {
@@ -1066,6 +1125,13 @@ export default function (pi: ExtensionAPI) {
       systemPromptChannel: Type.Optional(Type.Boolean({ description: t('param.systemPromptChannel') })),
       periodicChannel: Type.Optional(Type.Boolean({ description: t('param.periodicChannel') })),
       randomReviewChannel: Type.Optional(Type.Boolean({ description: t('param.randomReviewChannel') })),
+      block: Type.Optional(Type.String({ description: t('param.block') })),
+      value: Type.Optional(Type.String({ description: t('param.value') })),
+      todoItem: Type.Optional(
+        Type.Union([Type.Number(), Type.String()], { description: t('param.todoItem') }),
+      ),
+      todoDone: Type.Optional(Type.Boolean({ description: t('param.todoDone') })),
+      todoStatus: Type.Optional(Type.String({ description: t('param.todoStatus') })),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       ctxRef = ctx;
@@ -1104,6 +1170,57 @@ export default function (pi: ExtensionAPI) {
           return {
             content: [{ type: 'text', text: (err as Error).message }],
             details: { ok: false, error: 'checkpoint-ambiguous' },
+          };
+        }
+      }
+
+      // BLOCK WRITES. The card is written IN BLOCKS so that saving the plan does not require
+      // re-sending the objective, and — more importantly — so that a block write cannot drop a
+      // section the caller never mentioned. A whole-card write is a full overwrite; this is the
+      // narrow version of it. `block` + `value` replaces ONE section; `todoItem` ticks ONE item
+      // of the list. Both need an EXISTING card: creating one from a single block would silently
+      // discard whatever else the session had, which is the one thing a recovery mechanism must
+      // never do. An unknown block is refused with the allowed list rather than guessed.
+      if (params.block !== undefined || params.todoItem !== undefined) {
+        if (!card || cardOrigin === 'draft') {
+          return {
+            content: [{ type: 'text', text: t('error.needCardAndCheckpoint') }],
+            details: { ok: false, error: 'card-missing' },
+          };
+        }
+        if (params.block !== undefined && params.todoItem !== undefined) {
+          return {
+            content: [{ type: 'text', text: t('error.blockOrTodo') }],
+            details: { ok: false, error: 'incompatible-params' },
+          };
+        }
+        try {
+          if (params.todoItem !== undefined) {
+            // `todoStatus` wins when present: it is the richer form. `todoDone` stays as the
+            // shorthand, so every existing caller keeps working unchanged.
+            const state = params.todoStatus ?? (params.todoDone !== false);
+            text = currentScope().checkTodo(card, params.todoItem, state, scopeOpts);
+          } else {
+            const kind = String(params.block ?? '').trim().toLowerCase();
+            const allowed = ['always', 'active', 'objective', 'plan', 'todo'];
+            if (!allowed.includes(kind)) {
+              return {
+                content: [{ type: 'text', text: t('error.unknownBlock', { block: kind, allowed: allowed.join(', ') }) }],
+                details: { ok: false, error: 'unknown-block', allowed },
+              };
+            }
+            if (params.value === undefined) {
+              return {
+                content: [{ type: 'text', text: t('error.blockNeedsValue', { block: kind }) }],
+                details: { ok: false, error: 'value-missing', allowed },
+              };
+            }
+            text = currentScope().replaceBlock(card, kind, params.value, scopeOpts);
+          }
+        } catch (err) {
+          return {
+            content: [{ type: 'text', text: (err as Error).message }],
+            details: { ok: false, error: 'block-refused' },
           };
         }
       }
@@ -1147,7 +1264,14 @@ export default function (pi: ExtensionAPI) {
       cardPath = target;
       cardOrigin = 'memory';
       cfg.generation += 1;
+      // A WRITE IS A REVISION. The age resets, and the review countdown restarts with it:
+      // changing the card IS the revision, so a review that was about to fire is no longer
+      // about to fire — the material it would have examined has just been rewritten. Without
+      // this the review arrives one turn after an edit and re-reads what was just written,
+      // which is the definition of noise.
       lastUpdateTurn = turns;
+      randomTarget = turns + pickRandomTarget();
+      cardLog(`WRITE: ${card.length} chars, generation ${cfg.generation}, review re-armed for turn ${randomTarget}`);
       if (params.everyTurns !== undefined) setIntervalTurns(params.everyTurns);
       if (params.role) cfg.role = params.role;
       if (typeof params.sessionCompactChannel === 'boolean') cfg.onCompact = params.sessionCompactChannel;
@@ -1225,6 +1349,36 @@ export default function (pi: ExtensionAPI) {
         case 'status':
           ctx.ui.notify(status(), 'info');
           return;
+
+        case 'blocks': {
+          // A STRUCTURED VIEW of the card. "Which sections exist, and how big is each" is the
+          // question the block API raises and the full card does not answer at a glance: reading
+          // the whole thing tells you what it says, not how it is divided.
+          if (!card) {
+            ctx.ui.notify(t('warn.cardAbsent', { key }), 'warning');
+            return;
+          }
+          // CAPTURED IN A CONST, and that is not cosmetic. `card` is a mutable module-level
+          // binding: the `if (!card) return` above narrows it to `string` HERE, but TypeScript
+          // widens it back inside the closure below, because a callback can run after `card` has
+          // changed. Assigning to a `const` makes the narrowing survive the closure.
+          const text = card;
+          const headings = [...text.matchAll(/^##[ \t]+(.+)$/gm)];
+          if (headings.length === 0) {
+            ctx.ui.notify(t('command.blocksNone', { chars: text.length }), 'info');
+            return;
+          }
+          const rows = headings.map((h, i) => {
+            const start = (h.index ?? 0) + h[0].length;
+            const end = i + 1 < headings.length ? (headings[i + 1].index ?? text.length) : text.length;
+            return t('command.blockLine', { title: h[1].trim(), chars: text.slice(start, end).trim().length });
+          });
+          ctx.ui.notify(
+            [t('command.blocksHeader', { total: text.length, count: headings.length }), ...rows].join('\n'),
+            'info',
+          );
+          return;
+        }
 
         case 'regenerate': {
           const target = globalCardPath();

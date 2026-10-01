@@ -132,6 +132,9 @@ export function sectionAliases(lang) {
   return {
     always: Array.isArray(aliases.always) ? aliases.always : ['Sempre valido', 'Always valid'],
     active: Array.isArray(aliases.active) ? aliases.active : ['Lavoro attivo', 'Active work'],
+    objective: Array.isArray(aliases.objective) ? aliases.objective : ['Obiettivo', 'Objective'],
+    plan: Array.isArray(aliases.plan) ? aliases.plan : ['Piano', 'Plan'],
+    todo: Array.isArray(aliases.todo) ? aliases.todo : ['Todo', 'Todolist'],
     topic: Array.isArray(aliases.topic) ? aliases.topic : ['topic', 'ambito', 'argomento'],
   };
 }
@@ -142,6 +145,9 @@ export function sectionTitles(lang) {
   return {
     always: catalog?.section?.always ?? 'Always valid',
     active: catalog?.section?.active ?? 'Active work',
+    objective: catalog?.section?.objective ?? 'Objective',
+    plan: catalog?.section?.plan ?? 'Plan',
+    todo: catalog?.section?.todo ?? 'Todo',
     topic: catalog?.section?.topicPrefix ?? 'Topic',
   };
 }

@@ -292,10 +292,13 @@ test('reload refreshes the ESM helper rather than keeping a stale cached copy', 
     const helper = path.join(h.temp, 'topic-scope.mjs');
     await h.tools.get('memory_card').execute('id', { text: card }, undefined, undefined, h.ctx);
     const old = fs.readFileSync(helper, 'utf8');
-    assert.match(old, /const selected = \[\.\.\.scope\.always, \.\.\.scope\.active\];/);
+    // The probe targets the TAIL of the permanent-section list, not the whole line: the list
+    // grew when the objective, plan and todo blocks were added, and a probe pinned to the old
+    // one-line form breaks for a reason that has nothing to do with the helper being re-read.
+    assert.match(old, /\.\.\.scope\.todo,/);
     fs.writeFileSync(helper, old.replace(
-      'const selected = [...scope.always, ...scope.active];',
-      "const selected = [...scope.always, ...scope.active, 'HELPER UPDATED'];",
+      '...scope.todo,',
+      "...scope.todo, 'HELPER UPDATED',",
     ));
     await h.handlers.get('session_start')({ reason: 'reload' }, h.ctx);
     const fresh = await h.handlers.get('context')({ messages: [{ role: 'user', content: 'continua' }] });
@@ -497,4 +500,97 @@ test('both languages produce the same number of prompt lines', async () => {
   const it = (await bootstrapIn('it')).split('\n');
   const en = (await bootstrapIn('en')).split('\n');
   assert.equal(it.length, en.length, 'one language must not lose lines against the other');
+});
+
+// ---- The block API, driven THROUGH THE TOOL ----------------------------------------------
+// The pure functions behind it are proved in topic-scope.test.mjs. What can still break here is
+// the WIRING: a perfect function connected to the wrong parameter, or to none at all. These
+// tests exist for that gap, and that is why they live in this file and not in that one.
+
+const BASE_CARD =
+  '## Sempre valido\nRegola A.\n\n## Lavoro attivo\nTask 1.\n\n## Topic: db\nNota sul db.';
+
+async function readCard(tool, h, id = 'read') {
+  const res = await tool.execute(id, {}, undefined, undefined, h.ctx);
+  return res.content[0].text;
+}
+
+test('block + value rewrites ONE section and leaves the others untouched', async () => {
+  const h = await harness();
+  try {
+    const tool = h.tools.get('memory_card');
+    assert.equal((await tool.execute('a', { text: BASE_CARD }, undefined, undefined, h.ctx)).details.ok, true);
+
+    const written = await tool.execute('b', { block: 'active', value: 'Task 2.' }, undefined, undefined, h.ctx);
+    assert.equal(written.details.ok, true, 'writing one block must succeed');
+
+    const card = await readCard(tool, h);
+    assert.match(card, /Task 2\./, 'the new body must be in the card');
+    assert.doesNotMatch(card, /Task 1\./, 'the old body must be gone');
+    assert.match(card, /Regola A\./, 'the stable section must be intact');
+    assert.match(card, /Nota sul db\./, 'the topic must be intact');
+  } finally { cleanup(h); }
+});
+
+test('a block that does not exist yet is APPENDED, not refused', async () => {
+  const h = await harness();
+  try {
+    const tool = h.tools.get('memory_card');
+    await tool.execute('a', { text: BASE_CARD }, undefined, undefined, h.ctx);
+    const written = await tool.execute('b', { block: 'todo', value: '- [ ] primo' }, undefined, undefined, h.ctx);
+    assert.equal(written.details.ok, true, 'a missing section must be created, not rejected');
+    const card = await readCard(tool, h);
+    assert.match(card, /## Todo/, 'the new section must exist');
+    assert.match(card, /- \[ \] primo/, 'with the body it was given');
+    assert.match(card, /Regola A\./, 'and the rest must still be there');
+  } finally { cleanup(h); }
+});
+
+test('todoItem has three states through the tool, and a boolean still works', async () => {
+  const h = await harness();
+  try {
+    const tool = h.tools.get('memory_card');
+    await tool.execute('a', { text: `${BASE_CARD}\n\n## Todo\n- [ ] scrivere i test\n- [ ] leggere il codice` }, undefined, undefined, h.ctx);
+
+    const working = await tool.execute('b', { todoItem: 1, todoStatus: 'in_progress' }, undefined, undefined, h.ctx);
+    assert.equal(working.details.ok, true, 'todoStatus must be accepted by the tool');
+    let card = await readCard(tool, h);
+    assert.match(card, /- \[~\] scrivere i test/, 'in_progress must be visible');
+    assert.match(card, /- \[ \] leggere il codice/, 'the other item must not move');
+
+    // THE BOOLEAN KEEPS ITS OLD MEANING: this is what makes the change an extension and not a
+    // break. If this ever fails, every caller written before todoStatus existed is broken.
+    await tool.execute('c', { todoItem: 1, todoDone: true }, undefined, undefined, h.ctx);
+    card = await readCard(tool, h);
+    assert.match(card, /- \[x\] scrivere i test/, 'a boolean true must still mean completed');
+
+    await tool.execute('d', { todoItem: 1, todoDone: false }, undefined, undefined, h.ctx);
+    card = await readCard(tool, h);
+    assert.match(card, /- \[ \] scrivere i test/, 'a boolean false must still mean not done');
+  } finally { cleanup(h); }
+});
+
+test('an unknown block is REFUSED and the refusal names the allowed ones', async () => {
+  const h = await harness();
+  try {
+    const tool = h.tools.get('memory_card');
+    await tool.execute('a', { text: BASE_CARD }, undefined, undefined, h.ctx);
+    const bad = await tool.execute('b', { block: 'Spartito', value: 'x' }, undefined, undefined, h.ctx);
+    assert.equal(bad.details.ok, false, 'an unknown block must never be guessed into an existing one');
+    assert.equal(bad.details.error, 'unknown-block');
+    assert.deepEqual(bad.details.allowed, ['always', 'active', 'objective', 'plan', 'todo']);
+  } finally { cleanup(h); }
+});
+
+test('block and todoItem need a card: without one they are refused, not silently ignored', async () => {
+  const h = await harness();
+  try {
+    const tool = h.tools.get('memory_card');
+    const noCard = await tool.execute('a', { block: 'todo', value: 'x' }, undefined, undefined, h.ctx);
+    assert.equal(noCard.details.ok, false, 'writing a block with no card must be refused');
+    assert.equal(noCard.details.error, 'card-missing');
+
+    const noTodo = await tool.execute('b', { todoItem: 1, todoDone: true }, undefined, undefined, h.ctx);
+    assert.equal(noTodo.details.ok, false, 'checking an item with no card must be refused');
+  } finally { cleanup(h); }
 });

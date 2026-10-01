@@ -7,6 +7,9 @@
   "section": {
     "always": "Sempre valido",
     "active": "Lavoro attivo",
+    "objective": "Obiettivo",
+    "plan": "Piano",
+    "todo": "Todo",
     "topicPrefix": "Topic",
     "_aliases": {
       "_note": "Pattern di riconoscimento delle intestazioni di sezione. Gli alias italiani e inglesi sono sempre accettati, così una carta resta modificabile dopo il cambio di lingua.",
@@ -21,6 +24,22 @@
         "Active work",
         "Active",
         "Active Work"
+      ],
+      "objective": [
+        "Obiettivo",
+        "Objective",
+        "Goal"
+      ],
+      "plan": [
+        "Piano",
+        "Plan"
+      ],
+      "todo": [
+        "Todo",
+        "Todolist",
+        "To-do",
+        "Attivita",
+        "Tasks"
       ],
       "topic": [
         "topic",
@@ -37,6 +56,9 @@
     "helperUnreadable": "Anti-amnesia: helper topic-scope.mjs non leggibile.",
     "helperIncompatible": "Anti-amnesia: helper topic-scope incompatibile; riavvia Pi.",
     "exactlyOneActive": "Serve esattamente una sezione '## {active}': migra la carta prima di aggiornare il checkpoint.",
+    "blockOrTodo": "Usa 'block' o 'todoItem', non entrambi: una scrittura fa una cosa sola.",
+    "unknownBlock": "Blocco '{block}' sconosciuto. Ammessi: {allowed}.",
+    "blockNeedsValue": "Il blocco '{block}' richiede 'value': il nuovo corpo della sezione.",
     "sessionIsolated": "La carta è isolata per sessione: non è consentito leggere o scrivere una chiave diversa da quella attiva.",
     "intervalRange": "everyTurns deve essere fra 1 e {max}: carta invariata.",
     "textOrActive": "Passa text oppure activeWork, non entrambi.",
@@ -113,10 +135,18 @@
     "sessionCompactChannel": "Canale session_compact (dopo compattazione). Default ON.",
     "systemPromptChannel": "Canale system prompt (ogni turno). Default OFF.",
     "periodicChannel": "Canale periodico (ogni N turni). Default ON.",
-    "randomReviewChannel": "Canale random review (ciclo casuale). Default ON."
+    "randomReviewChannel": "Canale random review (ciclo casuale). Default ON.",
+    "block": "Scrive UN blocco solo: 'always', 'active', 'objective', 'plan' o 'todo'. Le altre sezioni restano intatte. Richiede 'value'.",
+    "value": "Il nuovo corpo del blocco indicato da 'block'. Sostituisce quella sezione; se non esiste, la crea in fondo.",
+    "todoItem": "Spunta (o toglie la spunta a) UNA voce del blocco 'todo': un indice a partire da 1, oppure il testo della voce. Un indirizzo ambiguo viene rifiutato.",
+    "todoDone": "true (default) spunta la voce, false le toglie la spunta.",
+    "todoStatus": "Stato della voce: 'pending', 'in_progress' o 'completed'. Ha la precedenza su todoDone. Serve a dire a colpo d'occhio su cosa si sta lavorando."
   },
   "command": {
-    "description": "Carta anti-amnesia: /card | /card regenerate | /card every N | /card on|off | /card <canale> on|off | /card now | /card project"
+    "description": "Carta anti-amnesia: /card | /card blocks | /card regenerate | /card every N | /card on|off | /card <canale> on|off | /card now | /card project",
+    "blocksHeader": "Carta: {total} caratteri in {count} sezioni.",
+    "blockLine": "  {title} — {chars} caratteri",
+    "blocksNone": "Carta senza sezioni '## ': {chars} caratteri di testo non strutturato."
   },
   "scope": {
     "unclassifiedHint": "[Sezioni ## non classificate escluse: {list}. Migra a '{always}', '{active}' o '{topic}: ...']",
@@ -178,6 +208,9 @@
       "     Scrivi \"nessuno\" se il lavoro è finito. Aggiorna a ogni cambio fase con",
       "     memory_card({ activeWork: \"obiettivo; stato verificato; prossimo passo; blocchi\" })."
     ],
+    "sectionObjective": "  ## {objective} — l'obiettivo di QUESTA sessione, in una frase. Non cambia a ogni giro.",
+    "sectionPlan": "  ## {plan} — i passi ordinati, dal primo all'ultimo. Segna il progresso man mano.",
+    "sectionTodo": "  ## {todo} — la checklist operativa, una voce per riga come '- [ ] testo'. Spuntala con memory_card invece di riscrivere la carta.",
     "sectionTopic": "  ## {topic}: parola1, parola2 — appunti ARCHIVIATI/non attivi, solo per richieste esplicite.",
     "topicWarning": "  Non nascondere il lavoro attivo in {topic}: non dipende dalle parole dell'ultimo prompt.",
     "handoff": [

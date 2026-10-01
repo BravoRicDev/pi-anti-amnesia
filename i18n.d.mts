@@ -5,12 +5,18 @@ export type Translator = (key: string, vars?: InterpolationVars) => string;
 export interface SectionAliases {
   always: string[];
   active: string[];
+  objective: string[];
+  plan: string[];
+  todo: string[];
   topic: string[];
 }
 
 export interface SectionTitles {
   always: string;
   active: string;
+  objective: string;
+  plan: string;
+  todo: string;
   topic: string;
 }
 
