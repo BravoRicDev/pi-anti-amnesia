@@ -189,7 +189,7 @@ const CHANNEL_FIELDS: Record<
   session_compact: 'onCompact',
   system_prompt: 'systemPromptChannel',
   periodic: 'periodicChannel',
-  randomReview: 'randomReviewChannel',
+  randomreview: 'randomReviewChannel',
   gate: 'gate',
 };
 
@@ -480,6 +480,7 @@ export default function (pi: ExtensionAPI) {
     }
     card = null;
     cardPath = null;
+    cardOrigin = 'global';
   }
 
 
@@ -925,6 +926,9 @@ export default function (pi: ExtensionAPI) {
 
   // Channel a) + b) ephemeral delivery, guaranteed on every LLM call
   pi.on('context', async (event) => {
+    // Card files may be edited by another live Pi process. The file is the source
+    // of truth, so refresh before deciding what this hook injects.
+    if (cardOrigin !== 'draft') loadCard();
     if (!cfg.active) {
       cardLog(`CONTEXT turn ${turns}: skipped, the extension is switched off`);
       return;
@@ -1143,17 +1147,50 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
+      // Disk is authoritative: a second process may have edited the card since the
+      // last hook ran. Reload before validating or writing so this process can never
+      // acknowledge a write that erases an external change from a stale cache.
+      if (cardOrigin !== 'draft') loadCard();
+
       if (params.everyTurns !== undefined &&
-          (!Number.isFinite(params.everyTurns) || params.everyTurns < 1 || params.everyTurns > MAX_INTERVAL_TURNS)) {
+          (!Number.isInteger(params.everyTurns) || params.everyTurns < 1 || params.everyTurns > MAX_INTERVAL_TURNS)) {
         return {
           content: [{ type: 'text', text: t('error.intervalRange', { max: MAX_INTERVAL_TURNS }) }],
           details: { ok: false, error: 'invalid-interval' },
         };
       }
-      if (params.text !== undefined && params.activeWork !== undefined) {
+      const hasBlock = params.block !== undefined;
+      const hasTodo = params.todoItem !== undefined;
+      const contentWrites = [params.text !== undefined, params.activeWork !== undefined, hasBlock, hasTodo].filter(Boolean).length;
+      if (contentWrites > 1) {
         return {
-          content: [{ type: 'text', text: t('error.textOrActive') }],
+          content: [{ type: 'text', text: t('error.mutationConflict') }],
           details: { ok: false, error: 'incompatible-params' },
+        };
+      }
+      if (params.value !== undefined && !hasBlock) {
+        return {
+          content: [{ type: 'text', text: t('error.orphanValue') }],
+          details: { ok: false, error: 'orphan-param', parameter: 'value', requires: 'block' },
+        };
+      }
+      if ((params.todoDone !== undefined || params.todoStatus !== undefined) && !hasTodo) {
+        return {
+          content: [{ type: 'text', text: t('error.orphanTodoState') }],
+          details: { ok: false, error: 'orphan-param', requires: 'todoItem' },
+        };
+      }
+      if (hasTodo && params.todoDone === undefined && params.todoStatus === undefined) {
+        return {
+          content: [{ type: 'text', text: t('error.todoStateMissing') }],
+          details: { ok: false, error: 'todo-state-missing', allowed: ['todoDone', 'todoStatus'] },
+        };
+      }
+      const allowedTodoStatuses = ['pending', 'in_progress', 'completed'];
+      if (params.todoStatus !== undefined && !allowedTodoStatuses.includes(params.todoStatus)) {
+        return {
+          content: [{ type: 'text', text: t('error.invalidTodoStatus', { allowed: allowedTodoStatuses.join(', ') }) }],
+          details: { ok: false, error: 'invalid-todo-status', allowed: allowedTodoStatuses },
         };
       }
       let text = (params.text ?? '').trim();
@@ -1196,9 +1233,17 @@ export default function (pi: ExtensionAPI) {
         }
         try {
           if (params.todoItem !== undefined) {
-            // `todoStatus` wins when present: it is the richer form. `todoDone` stays as the
-            // shorthand, so every existing caller keeps working unchanged.
-            const state = params.todoStatus ?? (params.todoDone !== false);
+            // Validation above requires an explicit state. `todoStatus` is the richer
+            // form; `todoDone` remains the Boolean shorthand for pending/completed.
+            const state = params.todoStatus ?? params.todoDone;
+            // The earlier validation makes this unreachable at runtime; this guard also
+            // narrows the optional schema field for TypeScript without an assertion.
+            if (state === undefined) {
+              return {
+                content: [{ type: 'text', text: t('error.todoStateMissing') }],
+                details: { ok: false, error: 'todo-state-missing', allowed: ['todoDone', 'todoStatus'] },
+              };
+            }
             text = currentScope().checkTodo(card, params.todoItem, state, scopeOpts);
           } else {
             const kind = String(params.block ?? '').trim().toLowerCase();
@@ -1341,6 +1386,8 @@ export default function (pi: ExtensionAPI) {
     description: t('command.description'),
     handler: async (args, ctx) => {
       ctxRef = ctx;
+      // Commands can read or write the card too; never operate on stale memory.
+      if (cardOrigin !== 'draft') loadCard();
       const parts = (args ?? '').trim().split(/\s+/).filter(Boolean);
       const action = (parts[0] ?? '').toLowerCase();
 
@@ -1406,7 +1453,7 @@ export default function (pi: ExtensionAPI) {
 
         case 'every': {
           const n = Number(parts[1]);
-          if (!Number.isFinite(n) || n < 1 || n > MAX_INTERVAL_TURNS) {
+          if (!Number.isInteger(n) || n < 1 || n > MAX_INTERVAL_TURNS) {
             ctx.ui.notify(t('error.usageEveryN', { max: MAX_INTERVAL_TURNS }), 'warning');
             return;
           }
@@ -1432,7 +1479,7 @@ export default function (pi: ExtensionAPI) {
         case 'session_compact':
         case 'system_prompt':
         case 'periodic':
-        case 'randomReview':
+        case 'randomreview':
         case 'gate': {
           // /card <channel> [on|off] -> toggle the single channel.
           // With no argument it shows the channel state.
@@ -1440,7 +1487,7 @@ export default function (pi: ExtensionAPI) {
           const sub = (parts[1] ?? '').toLowerCase();
           if (sub === 'on' || sub === 'off') {
             cfg[field] = sub === 'on';
-            if (action === 'randomReview' && sub === 'on') {
+            if (action === 'randomreview' && sub === 'on') {
               pendingRandomReview = false;
               randomTarget = turns + pickRandomTarget();
             }
@@ -1525,7 +1572,13 @@ export default function (pi: ExtensionAPI) {
         }
 
         case 'delete': {
-          const targetKey = parts[1] ?? key;
+          // Keep the raw remainder: whitespace in a key is invalid, but it must be
+          // rejected as such rather than silently searching only its first word.
+          const targetKey = (args ?? '').trim().replace(/^delete(?:\s+|$)/i, '').trim();
+          if (!targetKey) {
+            ctx.ui.notify(t('error.deleteNeedsKey'), 'warning');
+            return;
+          }
           // The command also reads historical keys: never use them directly in path.join
           // without preventing traversal (../, slash, absolute paths).
           if (!/^[a-z0-9][a-z0-9._-]{0,59}$/.test(targetKey)) {

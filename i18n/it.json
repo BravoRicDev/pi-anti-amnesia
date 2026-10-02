@@ -2,7 +2,7 @@
   "_meta": {
     "language": "it",
     "note": "Copia questo file in i18n/<lang>.json per aggiungere una lingua. Le chiavi sono l'API: non rinominarle.",
-    "placeholders": "Usa {nome} per l'interpolazione. Non concatenare frammenti tradotti nel punto di chiamata."
+    "placeholders": "Usa il nome reale della variabile, per esempio {name}, per l'interpolazione. Non tradurre i nomi dei segnaposto né concatenare frammenti tradotti nel punto di chiamata."
   },
   "section": {
     "always": "Sempre valido",
@@ -62,6 +62,12 @@
     "sessionIsolated": "La carta è isolata per sessione: non è consentito leggere o scrivere una chiave diversa da quella attiva.",
     "intervalRange": "everyTurns deve essere fra 1 e {max}: carta invariata.",
     "textOrActive": "Passa text oppure activeWork, non entrambi.",
+    "mutationConflict": "Passa una sola mutazione di contenuto: text, activeWork, block oppure todoItem.",
+    "orphanValue": "'value' richiede 'block': nessuna sezione della carta è stata modificata.",
+    "orphanTodoState": "todoDone o todoStatus richiedono todoItem: nessun elemento todo è stato modificato.",
+    "todoStateMissing": "todoItem richiede todoDone o todoStatus espliciti: l'elemento è rimasto invariato.",
+    "invalidTodoStatus": "todoStatus non valido. Ammessi: {allowed}.",
+    "deleteNeedsKey": "Uso: /card delete <chiave>. Rifiutata la cancellazione implicita della carta attiva.",
     "needCardAndCheckpoint": "Serve una carta esistente e un checkpoint non vuoto.",
     "cardTooLong": "Carta troppo lunga ({len} > {max} char). Comprimila.",
     "cardUnchanged": "Carta precedente invariata: scrittura fallita: {err}",

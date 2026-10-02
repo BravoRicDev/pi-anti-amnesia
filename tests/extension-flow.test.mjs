@@ -594,3 +594,39 @@ test('block and todoItem need a card: without one they are refused, not silently
     assert.equal(noTodo.details.ok, false, 'checking an item with no card must be refused');
   } finally { cleanup(h); }
 });
+
+test('memory_card rejects ambiguous mutations and refreshes its disk source', async () => {
+  const h = await harness();
+  const tool = h.tools.get('memory_card');
+  const command = h.commands.get('card');
+  try {
+    await tool.execute('seed', { text: BASE_CARD }, undefined, undefined, h.ctx);
+    const invalid = [
+      { text: 'full replacement', block: 'active', value: 'block' },
+      { activeWork: 'checkpoint', block: 'active', value: 'block' },
+      { value: 'orphan value' },
+      { todoStatus: 'completed' },
+      { todoItem: 1 },
+      { todoItem: 1, todoStatus: 'unknown-status' },
+    ];
+    for (const params of invalid) {
+      const result = await tool.execute('invalid', params, undefined, undefined, h.ctx);
+      assert.equal(result.details.ok, false, `must refuse ${JSON.stringify(params)}`);
+    }
+
+    const file = path.join(h.temp, '.pi', 'anti-amnesia', 'cards', 'test-session-uuid.md');
+    fs.writeFileSync(file, '## Sempre valido\nEXTERNAL-DISK-MARKER\n');
+    const reread = await tool.execute('read', {}, undefined, undefined, h.ctx);
+    assert.match(reread.content[0].text, /EXTERNAL-DISK-MARKER/, 'tool must reload an external disk edit before reading');
+
+    h.notifications.length = 0;
+    await command.handler('every 1.5', h.ctx);
+    assert.match(String(h.notifications[h.notifications.length - 1]?.[0]), /Usage|Uso/, 'fractional intervals must be rejected');
+    h.notifications.length = 0;
+    await command.handler('randomReview off', h.ctx);
+    assert.doesNotMatch(String(h.notifications[h.notifications.length - 1]?.[0]), /Actions|Azioni/, 'randomReview must reach its channel handler');
+    h.notifications.length = 0;
+    await command.handler('delete', h.ctx);
+    assert.match(String(h.notifications[h.notifications.length - 1]?.[0]), /Usage|Uso/, 'delete must require an explicit key');
+  } finally { cleanup(h); }
+});
