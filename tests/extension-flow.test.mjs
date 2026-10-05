@@ -52,7 +52,7 @@ const typeboxUrl = typeboxPath ? pathToFileURL(typeboxPath).href : null;
 const root = path.resolve(import.meta.dirname, '..');
 const source = fs.readFileSync(path.join(root, 'index.ts'), 'utf8');
 
-async function harness() {
+async function harness(opts = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'anti-amnesia-test-'));
   const home = process.env.HOME;
   process.env.HOME = temp;
@@ -67,7 +67,9 @@ async function harness() {
     // temporary dir the session does not start and every test dies on helperUnreadable.
     fs.copyFileSync(path.join(root, 'i18n.mjs'), path.join(temp, 'i18n.mjs'));
     fs.cpSync(path.join(root, 'i18n'), path.join(temp, 'i18n'), { recursive: true });
-    fs.writeFileSync(path.join(temp, 'config.json'), fs.readFileSync(path.join(root, 'config.json')));
+    const cfgObj = JSON.parse(fs.readFileSync(path.join(root, 'config.json'), 'utf8'));
+    cfgObj.bootstrapAfterTurns = opts?.bootstrapAfterTurns ?? 0;
+    fs.writeFileSync(path.join(temp, 'config.json'), JSON.stringify(cfgObj));
     const handlers = new Map();
     const tools = new Map();
     const commands = new Map();
@@ -628,5 +630,30 @@ test('memory_card rejects ambiguous mutations and refreshes its disk source', as
     h.notifications.length = 0;
     await command.handler('delete', h.ctx);
     assert.match(String(h.notifications[h.notifications.length - 1]?.[0]), /Usage|Uso/, 'delete must require an explicit key');
+  } finally { cleanup(h); }
+});
+
+test('bootstrap is delayed until bootstrapAfterTurns (default turn 4)', async () => {
+  const h = await harness({ bootstrapAfterTurns: 4 });
+  try {
+    // Turn 0: before turn threshold -> no bootstrap proposed
+    const early1 = await h.handlers.get('before_agent_start')({ prompt: 'Turn 0 prompt' }, h.ctx);
+    assert.equal(early1, undefined, 'turn 0 must not trigger bootstrap when bootstrapAfterTurns is 4');
+
+    // Simulate turns 0 -> 1 -> 2 -> 3
+    await h.handlers.get('turn_end')({}, h.ctx); // turns becomes 1
+    const early2 = await h.handlers.get('before_agent_start')({ prompt: 'Turn 1 prompt' }, h.ctx);
+    assert.equal(early2, undefined, 'turn 1 must not trigger bootstrap');
+
+    await h.handlers.get('turn_end')({}, h.ctx); // turns becomes 2
+    await h.handlers.get('turn_end')({}, h.ctx); // turns becomes 3
+    const early3 = await h.handlers.get('before_agent_start')({ prompt: 'Turn 3 prompt' }, h.ctx);
+    assert.equal(early3, undefined, 'turn 3 must not trigger bootstrap');
+
+    // Turn 4: reaches threshold -> bootstrap proposal returned
+    await h.handlers.get('turn_end')({}, h.ctx); // turns becomes 4
+    const atThreshold = await h.handlers.get('before_agent_start')({ prompt: 'Turn 4 prompt' }, h.ctx);
+    assert.ok(atThreshold && typeof atThreshold.message?.content === 'string', 'turn 4 must trigger bootstrap');
+    assert.match(atThreshold.message.content, /anti-amnesia|memory_card/i, 'bootstrap prompt content expected');
   } finally { cleanup(h); }
 });

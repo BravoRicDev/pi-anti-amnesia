@@ -96,6 +96,8 @@ interface CardConfig {
   everyTurns: number;
   /** Enables Phase 1 bootstrap: asks the agent to write its own card. */
   bootstrap: boolean;
+  /** Number of initial turns to wait before proposing bootstrap (default 4). */
+  bootstrapAfterTurns: number;
   /** Enables injection into the system prompt (channel c). */
   systemPromptChannel: boolean;
   /** Enables periodic refresh every N turns (channel b). */
@@ -127,6 +129,7 @@ interface CardConfig {
 const DEFAULTS: CardConfig = {
   everyTurns: 15,
   bootstrap: true,
+  bootstrapAfterTurns: 4,
   systemPromptChannel: false,
   periodicChannel: true,
   randomReviewChannel: true,
@@ -509,6 +512,12 @@ export default function (pi: ExtensionAPI) {
     }
     if (!Number.isFinite(cfg.everyTurns) || cfg.everyTurns < 1 || cfg.everyTurns > MAX_INTERVAL_TURNS) cfg.everyTurns = DEFAULTS.everyTurns;
     cfg.everyTurns = Math.floor(cfg.everyTurns);
+    const bat = (cfg as any).bootstrapAfterTurns;
+    if (typeof bat === 'number' && Number.isFinite(bat)) {
+      cfg.bootstrapAfterTurns = Math.max(0, Math.floor(bat));
+    } else {
+      cfg.bootstrapAfterTurns = DEFAULTS.bootstrapAfterTurns;
+    }
     for (const field of ['bootstrap', 'systemPromptChannel', 'periodicChannel', 'randomReviewChannel', 'onCompact', 'gate', 'active'] as const) {
       // A hand-edited config.json can hold the STRING "false". Falling back to
       // the default for anything non-boolean turned an explicit "off" into
@@ -610,7 +619,9 @@ export default function (pi: ExtensionAPI) {
           topic: sectionTitles.topic,
         })
       : '';
-    return `[ANTI-AMNESIA \u00b7 ${reason}]\n${scoped.text}${warning}${unclassified}`;
+    const passiveHeader = `[SISTEMA \u00b7 MEMORIA DI SESSIONE PASSIVA (NON RISPONDERE)]`;
+    const passiveNotice = `\n[Memoria interna pregressa. NON rispondere a questo blocco, NON commentarlo. Continua normalmente eseguendo la richiesta dell'utente.]`;
+    return `${passiveHeader}\n[ANTI-AMNESIA \u00b7 ${reason}]\n${scoped.text}${warning}${unclassified}${passiveNotice}`;
   }
 
   function injectEphemeral(reason: string): string {
@@ -676,14 +687,14 @@ export default function (pi: ExtensionAPI) {
     selectedTools?: string[];
   }
 
-  function bootstrapMessage(o: FreshContext): string {
-    const files = o.contextFiles ?? [];
+  function bootstrapMessage(o?: FreshContext): string {
+    const opts = o ?? {};
+    const files = opts.contextFiles ?? [];
     const fileList = files.length
       ? files.map((f) => `  - ${f.path}`).join('\n')
       : t('bootstrap.noContextFiles');
-    const tools = o.selectedTools ?? [];
+    const tools = opts.selectedTools ?? [];
     const draftActive = cardOrigin === 'draft' && Boolean(card);
-
 
     const bt = scopeI18n.bootstrap as Record<string, unknown> | undefined;
     // A wrong array key would degrade silently: the prompt would lose
@@ -691,7 +702,7 @@ export default function (pi: ExtensionAPI) {
     const missing = (key: string) => [`[missing i18n key: ${key} (${lang})]`];
     const rows = (key: string): string[] =>
       Array.isArray(bt?.[key]) ? (bt[key] as string[]) : missing(`bootstrap.${key}`);
-    const vars = { cwd: o.cwd ?? ctxRef?.cwd ?? '?', path: cardPath ?? '', active: sectionTitles.active, topic: sectionTitles.topic, always: sectionTitles.always, objective: sectionTitles.objective, plan: sectionTitles.plan, todo: sectionTitles.todo };
+    const vars = { cwd: opts.cwd ?? ctxRef?.cwd ?? '?', path: cardPath ?? '', active: sectionTitles.active, topic: sectionTitles.topic, always: sectionTitles.always, objective: sectionTitles.objective, plan: sectionTitles.plan, todo: sectionTitles.todo };
 
     return [
       typeof bt?.header === 'string' ? bt.header : '[ANTI-AMNESIA]',
@@ -700,7 +711,7 @@ export default function (pi: ExtensionAPI) {
       '',
       t('bootstrap.detected'),
       t('bootstrap.cwd', { cwd: vars.cwd }),
-      t('bootstrap.rolePromptLoaded', { value: o.customPrompt ? t('bootstrap.rolePromptCustom') : t('bootstrap.rolePromptNone') }),
+      t('bootstrap.rolePromptLoaded', { value: opts.customPrompt ? t('bootstrap.rolePromptCustom') : t('bootstrap.rolePromptNone') }),
       t('bootstrap.contextFiles'),
       fileList,
       tools.length ? t('bootstrap.activeTools', { tools: tools.join(', ') }) : '',
@@ -830,6 +841,7 @@ export default function (pi: ExtensionAPI) {
     if (!card || cardOrigin === 'draft') {
       if (bootstrapped) return;
       if (!cfg.bootstrap) return;
+      if (turns < cfg.bootstrapAfterTurns) return;
       bootstrapped = true;
       return {
         message: {
@@ -868,7 +880,7 @@ export default function (pi: ExtensionAPI) {
     const stalenessLimit = 2 * cfg.everyTurns;
     const isStale = (turns - lastUpdateTurn) >= stalenessLimit;
 
-    if (cfg.periodicChannel && (periodicTurns % cfg.everyTurns === 0 || isStale)) {
+    if (cfg.periodicChannel && (periodicTurns % cfg.everyTurns === 0 || (isStale && turns % cfg.everyTurns === 0))) {
       pendingPeriodic = true;
       const inCooldown = gateLastViolationTurn > 0 && (turns - gateLastViolationTurn) < GATE_COOLDOWN_TURNS;
       if (cfg.gate && activeGate === null && !inCooldown) activeGate = { channel: 'periodic', turn: turns, attempts: 0 };
@@ -1161,13 +1173,6 @@ export default function (pi: ExtensionAPI) {
       }
       const hasBlock = params.block !== undefined;
       const hasTodo = params.todoItem !== undefined;
-      const contentWrites = [params.text !== undefined, params.activeWork !== undefined, hasBlock, hasTodo].filter(Boolean).length;
-      if (contentWrites > 1) {
-        return {
-          content: [{ type: 'text', text: t('error.mutationConflict') }],
-          details: { ok: false, error: 'incompatible-params' },
-        };
-      }
       if (params.value !== undefined && !hasBlock) {
         return {
           content: [{ type: 'text', text: t('error.orphanValue') }],
@@ -1193,16 +1198,31 @@ export default function (pi: ExtensionAPI) {
           details: { ok: false, error: 'invalid-todo-status', allowed: allowedTodoStatuses },
         };
       }
+      if (params.text !== undefined && (params.block !== undefined || params.activeWork !== undefined || params.todoItem !== undefined)) {
+        return {
+          content: [{ type: 'text', text: t('error.mutationConflict') }],
+          details: { ok: false, error: 'incompatible-params' },
+        };
+      }
+      if (params.block !== undefined && (params.activeWork !== undefined || params.todoItem !== undefined)) {
+        return {
+          content: [{ type: 'text', text: t('error.mutationConflict') }],
+          details: { ok: false, error: 'incompatible-params' },
+        };
+      }
       let text = (params.text ?? '').trim();
+      let workingCard = text || (card ?? '');
+
       if (params.activeWork !== undefined) {
-        if (!card || !params.activeWork.trim()) {
+        if (!workingCard || !params.activeWork.trim()) {
           return {
             content: [{ type: 'text', text: t('error.needCardAndCheckpoint') }],
             details: { ok: false, error: 'checkpoint-missing' },
           };
         }
         try {
-          text = currentScope().replaceActiveCheckpoint(card, params.activeWork, scopeOpts);
+          workingCard = currentScope().replaceActiveCheckpoint(workingCard, params.activeWork, scopeOpts);
+          text = workingCard;
         } catch (err) {
           return {
             content: [{ type: 'text', text: (err as Error).message }],
@@ -1218,50 +1238,55 @@ export default function (pi: ExtensionAPI) {
       // of the list. Both need an EXISTING card: creating one from a single block would silently
       // discard whatever else the session had, which is the one thing a recovery mechanism must
       // never do. An unknown block is refused with the allowed list rather than guessed.
-      if (params.block !== undefined || params.todoItem !== undefined) {
-        if (!card || cardOrigin === 'draft') {
+      if (params.block !== undefined) {
+        if (!workingCard || cardOrigin === 'draft') {
           return {
             content: [{ type: 'text', text: t('error.needCardAndCheckpoint') }],
             details: { ok: false, error: 'card-missing' },
           };
         }
-        if (params.block !== undefined && params.todoItem !== undefined) {
+        const kind = String(params.block ?? '').trim().toLowerCase();
+        const allowed = ['always', 'active', 'objective', 'plan', 'todo'];
+        if (!allowed.includes(kind)) {
           return {
-            content: [{ type: 'text', text: t('error.blockOrTodo') }],
-            details: { ok: false, error: 'incompatible-params' },
+            content: [{ type: 'text', text: t('error.unknownBlock', { block: kind, allowed: allowed.join(', ') }) }],
+            details: { ok: false, error: 'unknown-block', allowed },
+          };
+        }
+        if (params.value === undefined) {
+          return {
+            content: [{ type: 'text', text: t('error.blockNeedsValue', { block: kind }) }],
+            details: { ok: false, error: 'value-missing', allowed },
           };
         }
         try {
-          if (params.todoItem !== undefined) {
-            // Validation above requires an explicit state. `todoStatus` is the richer
-            // form; `todoDone` remains the Boolean shorthand for pending/completed.
-            const state = params.todoStatus ?? params.todoDone;
-            // The earlier validation makes this unreachable at runtime; this guard also
-            // narrows the optional schema field for TypeScript without an assertion.
-            if (state === undefined) {
-              return {
-                content: [{ type: 'text', text: t('error.todoStateMissing') }],
-                details: { ok: false, error: 'todo-state-missing', allowed: ['todoDone', 'todoStatus'] },
-              };
-            }
-            text = currentScope().checkTodo(card, params.todoItem, state, scopeOpts);
-          } else {
-            const kind = String(params.block ?? '').trim().toLowerCase();
-            const allowed = ['always', 'active', 'objective', 'plan', 'todo'];
-            if (!allowed.includes(kind)) {
-              return {
-                content: [{ type: 'text', text: t('error.unknownBlock', { block: kind, allowed: allowed.join(', ') }) }],
-                details: { ok: false, error: 'unknown-block', allowed },
-              };
-            }
-            if (params.value === undefined) {
-              return {
-                content: [{ type: 'text', text: t('error.blockNeedsValue', { block: kind }) }],
-                details: { ok: false, error: 'value-missing', allowed },
-              };
-            }
-            text = currentScope().replaceBlock(card, kind, params.value, scopeOpts);
-          }
+          workingCard = currentScope().replaceBlock(workingCard, kind, params.value, scopeOpts);
+          text = workingCard;
+        } catch (err) {
+          return {
+            content: [{ type: 'text', text: (err as Error).message }],
+            details: { ok: false, error: 'block-refused' },
+          };
+        }
+      }
+
+      if (params.todoItem !== undefined) {
+        if (!workingCard || cardOrigin === 'draft') {
+          return {
+            content: [{ type: 'text', text: t('error.needCardAndCheckpoint') }],
+            details: { ok: false, error: 'card-missing' },
+          };
+        }
+        const state = params.todoStatus ?? params.todoDone;
+        if (state === undefined) {
+          return {
+            content: [{ type: 'text', text: t('error.todoStateMissing') }],
+            details: { ok: false, error: 'todo-state-missing', allowed: ['todoDone', 'todoStatus'] },
+          };
+        }
+        try {
+          workingCard = currentScope().checkTodo(workingCard, params.todoItem, state, scopeOpts);
+          text = workingCard;
         } catch (err) {
           return {
             content: [{ type: 'text', text: (err as Error).message }],

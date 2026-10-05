@@ -1,6 +1,7 @@
 {
   "language": "auto",
   "baseCard": "",
+  "bootstrapAfterTurns": 4,
   "periodicChannel": true,
   "randomReviewChannel": true,
   "periodic": "ephemeral",

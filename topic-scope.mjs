@@ -257,23 +257,43 @@ export function checkTodo(card, target, done, opts) {
   const lines = text.slice(start, end).split('\n');
   const items = [];
   lines.forEach((line, i) => {
-    const m = line.match(/^\s*[-*]\s+\[([ xX~])\]\s+(.*)$/);
+    // Resilient matching for markdown checklists: -, *, +, numbered (1., 1)) or plain bracket
+    const m = line.match(/^\s*(?:[-*+]|\d+[.)])?\s*\[([ xX~])\]\s+(.*)$/);
     if (m) items.push({ i, text: m[2].trim() });
   });
   if (items.length === 0) throw new Error('The todo block has no checkbox items.');
   let pick;
-  if (typeof target === 'number') {
-    if (!Number.isInteger(target) || target < 1 || target > items.length) {
-      throw new Error(`Todo item ${target} does not exist: the block has ${items.length} item(s), numbered from 1.`);
+
+  // If target is passed as numeric string like "1" or "2", treat as integer index
+  let targetIndex = typeof target === 'number' ? target : null;
+  if (typeof target === 'string' && /^\d+$/.test(target.trim())) {
+    targetIndex = parseInt(target.trim(), 10);
+  }
+
+  if (targetIndex !== null) {
+    if (!Number.isInteger(targetIndex) || targetIndex < 1 || targetIndex > items.length) {
+      throw new Error(`Todo item ${targetIndex} does not exist: the block has ${items.length} item(s), numbered from 1.`);
     }
-    pick = [items[target - 1]];
+    pick = [items[targetIndex - 1]];
   } else {
-    const needle = String(target ?? '').trim().toLocaleLowerCase(o.locale);
+    let rawNeedle = String(target ?? '').trim().toLocaleLowerCase(o.locale);
+    // Strip any accidental leading bullets, numbers or checkbox brackets passed in the target string
+    const cleanNeedle = rawNeedle.replace(/^\s*(?:[-*+]|\d+[.)])?\s*(?:\[[ xX~]?\])?\s*/, '').trim();
+    const needle = cleanNeedle || rawNeedle;
     if (!needle) throw new Error('Address a todo item by 1-based index or by its text.');
-    pick = items.filter((item) => item.text.toLocaleLowerCase(o.locale).includes(needle));
-    if (pick.length === 0) throw new Error(`No todo item contains "${target}".`);
-    if (pick.length > 1) {
-      throw new Error(`"${target}" matches ${pick.length} todo items: address it by index instead.`);
+
+    // 1. Exact match has priority over substring match
+    const exact = items.filter((item) => item.text.toLocaleLowerCase(o.locale) === needle);
+    if (exact.length === 1) {
+      pick = exact;
+    } else {
+      // 2. Substring match
+      const matching = items.filter((item) => item.text.toLocaleLowerCase(o.locale).includes(needle));
+      if (matching.length === 0) throw new Error(`No todo item contains "${target}".`);
+      if (matching.length > 1) {
+        throw new Error(`"${target}" matches ${matching.length} todo items: address it by index instead.`);
+      }
+      pick = matching;
     }
   }
   // THREE STATES, not two: pending, in_progress and completed. The middle one is why a long
